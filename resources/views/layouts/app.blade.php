@@ -13,24 +13,64 @@
 
         <!-- Scripts -->
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+        <script>
+            // Init theme on first paint
+            (function() {
+              const saved = localStorage.getItem('theme');
+              const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              const theme = saved ?? (prefersDark ? 'dark' : 'light');
+              if (theme === 'dark') document.documentElement.classList.add('dark');
+            })();
+            function toggleTheme() {
+              const root = document.documentElement;
+              const nowDark = !root.classList.contains('dark');
+              root.classList.toggle('dark', nowDark);
+              localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+            }
+        </script>
     </head>
-    <body class="font-sans antialiased">
-        <div class="min-h-screen bg-gray-100">
+    <body class="font-sans antialiased bg-gray-100 dark:bg-gray-900">
+        <div class="min-h-screen">
+            {{-- Top navigation (Breeze default) --}}
             @include('layouts.navigation')
 
-            <!-- Page Heading -->
+            {{-- Page heading with Dark/Light switch --}}
             @isset($header)
-                <header class="bg-white shadow">
-                    <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-                        {{ $header }}
+                <header class="bg-white dark:bg-gray-800 shadow">
+                    <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
+                        <div class="text-gray-900 dark:text-gray-100">
+                            {{ $header }}
+                        </div>
+
+                        <button type="button"
+                                onclick="toggleTheme()"
+                                class="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm
+                                       bg-white border-gray-300 text-gray-700 hover:bg-gray-50
+                                       dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-600">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M21.64 13.01A9 9 0 1 1 11 2.36a7 7 0 1 0 10.64 10.65z"/>
+                            </svg>
+                            <span>Theme</span>
+                        </button>
                     </div>
                 </header>
             @endisset
 
-            <!-- Page Content -->
-            <main>
-                {{ $slot }}
-            </main>
+            {{-- Main layout with sidebar + content --}}
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="py-6 flex gap-6">
+                    {{-- Sidebar (role-aware). Create this partial if you haven't yet. --}}
+                    @include('layouts.partials.sidebar')
+
+                    {{-- Page Content --}}
+                    <main class="flex-1">
+                        <div class="bg-white dark:bg-gray-800 dark:text-gray-100 rounded-md shadow">
+                            {{ $slot }}
+                        </div>
+                    </main>
+                </div>
+            </div>
         </div>
     </body>
 </html>
