@@ -3,6 +3,9 @@
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\ShiftWindowController;
+use App\Http\Controllers\ReportController;
+use App\Http\Controllers\AttendanceEditorController;
 use Illuminate\Support\Facades\DB;          // ✅ add this
 use Illuminate\Http\Request;               // ✅ optional (if you prefer not to fully-qualify)
 
@@ -37,6 +40,18 @@ Route::middleware(['auth','can:reports.view.org'])->get('/reports/attendance', f
         ->orderByDesc('work_date');
 
     return view('reports.attendance', ['rows' => $q->paginate(50)]);
+});
+
+Route::middleware(['auth','permission:reports.view.org'])->get('/reports/attendance', [ReportController::class,'index'])->name('reports.attendance');
+Route::middleware(['auth','permission:reports.export'])->get('/reports/attendance/export', [ReportController::class,'export'])->name('reports.attendance.export');
+
+Route::middleware(['auth','permission:schedules.manage'])
+    ->resource('shiftwindows', ShiftWindowController::class)->except(['show']);
+
+Route::middleware(['auth','permission:attendance.edit'])->group(function(){
+  Route::get('/attendance/editor', [AttendanceEditorController::class,'index'])->name('attendance.editor');
+  Route::get('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'edit'])->name('attendance.editor.edit');
+  Route::post('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'update'])->name('attendance.editor.update');
 });
 
 

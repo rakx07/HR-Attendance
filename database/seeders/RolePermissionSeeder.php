@@ -11,8 +11,12 @@ class RolePermissionSeeder extends Seeder
     public function run(): void
     {
         $permissions = [
-            'users.manage','device.manage','schedules.manage',
-            'reports.view.org','reports.export','team.approve','self.view'
+            // general
+            'reports.view.org','reports.export',
+            // HR
+            'employees.create','employees.update','employees.import',
+            'schedules.manage',
+            'attendance.edit' // allow editing daily in/out with audit
         ];
 
         foreach ($permissions as $perm) {
@@ -20,11 +24,15 @@ class RolePermissionSeeder extends Seeder
         }
 
         $roles = [
-            'IT Admin'      => ['users.manage','device.manage','schedules.manage','reports.view.org','reports.export'],
-            'HR Officer'    => ['schedules.manage','reports.view.org','reports.export'],
-            'Supervisor'    => ['team.approve','reports.export'],
-            'Employee'      => ['self.view'],
-            'Administrator' => $permissions,
+            'GIA Staff'     => ['reports.view.org','reports.export'],
+            'HR Officer'    => [
+                'reports.view.org','reports.export',
+                'employees.create','employees.update','employees.import',
+                'schedules.manage','attendance.edit'
+            ],
+            'IT Admin'      => array_unique($permissions),
+            'Employee'      => [], // can add 'self.view' if you later add a self portal
+            'Administrator' => array_unique($permissions),
         ];
 
         foreach ($roles as $roleName => $give) {
