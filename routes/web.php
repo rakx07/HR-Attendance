@@ -7,6 +7,7 @@ use App\Http\Controllers\ShiftWindowController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AttendanceEditorController;
 use App\Http\Controllers\DepartmentController;
+use App\Http\Controllers\HolidayController;
 
 
 /*
@@ -86,6 +87,19 @@ Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(func
     Route::post('/departments/transfer', [DepartmentController::class, 'transfer'])->name('departments.transfer');
     Route::get('/departments/history/{user}', [DepartmentController::class, 'history'])->name('departments.history');
 });
+
+Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(function () {
+    Route::get('/holidays', [HolidayController::class,'index'])->name('holidays.index');
+    Route::post('/holidays', [HolidayController::class,'store'])->name('holidays.store');
+    Route::get('/holidays/{calendar}', [HolidayController::class,'show'])->name('holidays.show');
+    Route::patch('/holidays/{calendar}/activate', [HolidayController::class,'activate'])->name('holidays.activate');
+
+    // Nested date routes
+    Route::post('/holidays/{calendar}/dates', [HolidayController::class,'storeDate'])->name('holidays.dates.store');
+    Route::patch('/holidays/{calendar}/dates/{date}', [HolidayController::class,'updateDate'])->name('holidays.dates.update');
+    Route::delete('/holidays/{calendar}/dates/{date}', [HolidayController::class,'destroyDate'])->name('holidays.dates.destroy');
+});
+
 
 // Breeze/Fortify/Jetstream auth routes
 require __DIR__.'/auth.php';

@@ -34,7 +34,6 @@
     @endcan
 
     {{-- HR Officer modules --}}
-    {{-- HR Officer modules --}}
   @role('HR Officer|Administrator|IT Admin')
   <div>
     <div class="px-3 text-gray-500 uppercase text-xs mb-1">HR Modules</div>
@@ -59,6 +58,20 @@
       Departments
     </a>
     @endcan
+
+        {{-- NEW: Holidays --}}
+    @can('holidays.manage')
+      <a href="{{ route('holidays.index') }}"
+        class="block px-3 py-2 rounded
+                {{ request()->routeIs('holidays.*')
+                    ? 'bg-gray-100 dark:bg-gray-700 font-medium'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-700' }}">
+        Holidays
+      </a>
+    @endcan
+
+
+
 
     @can('attendance.edit')
     <a href="{{ route('attendance.editor') }}"
