@@ -37,6 +37,8 @@ Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(func
     Route::get('/employees', [EmployeeController::class,'index'])->name('employees.index');
     Route::post('/employees/upload', [EmployeeController::class,'upload'])->name('employees.upload');
     Route::post('/employees', [EmployeeController::class,'store'])->name('employees.store');
+    Route::patch('/employees/{user}', [EmployeeController::class,'update'])->name('employees.update');
+
 });
 
 // Reports (restricted by permission)

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\Department;
 use App\Models\ShiftWindow;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -13,42 +14,59 @@ use App\Imports\EmployeesImport;
 class EmployeeController extends Controller
 {
     /**
-     * List employees (ordered by last, first) and all shift windows.
+     * Employees list with search & pagination.
+     *
+     * Query params:
+     *  - q: search term (name/email/school_id/zkteco_user_id)
+     *  - per_page: 10|20|30|50|100 (default 10)
      */
     public function index(Request $request)
     {
+        $perPage = (int) $request->input('per_page', 10);
+        if (! in_array($perPage, [10,20,30,50,100])) {
+            $perPage = 10;
+        }
+
         $users = User::query()
+            ->with(['shiftWindow','department'])
             ->select([
-                'id', 'email',
+                'id', 'email', 'school_id',
                 'first_name', 'middle_name', 'last_name',
-                'department', 'zkteco_user_id',
-                'shift_window_id', 'flexi_start', 'flexi_end',
-                'active', 'created_at',
+                'department_id', 'department', // (string label kept for legacy)
+                'zkteco_user_id', 'shift_window_id',
+                'flexi_start', 'flexi_end', 'active', 'created_at',
             ])
             ->when($request->filled('q'), function ($q) use ($request) {
                 $term = $request->string('q')->toString();
                 $q->where(function ($w) use ($term) {
-                    $w->where('first_name', 'like', "%$term%")
-                      ->orWhere('last_name', 'like', "%$term%")
-                      ->orWhere('email', 'like', "%$term%")
-                      ->orWhere('zkteco_user_id', 'like', "%$term%");
+                    $w->where('first_name', 'like', "%{$term}%")
+                      ->orWhere('last_name',  'like', "%{$term}%")
+                      ->orWhere('email',      'like', "%{$term}%")
+                      ->orWhere('school_id',  'like', "%{$term}%")
+                      ->orWhere('zkteco_user_id','like', "%{$term}%");
                 });
             })
             ->orderBy('last_name')
             ->orderBy('first_name')
-            ->paginate(20)
+            ->paginate($perPage)
             ->withQueryString();
 
-        $shifts = ShiftWindow::orderBy('name')->get(['id','name']);
+        $shifts         = ShiftWindow::orderBy('name')->get(['id','name']);
+        $departments    = Department::orderBy('name')->get(['id','name']);
+        $defaultShiftId = optional($shifts->first())->id;
 
         return view('employees.index', [
-            'users'  => $users,
-            'shifts' => $shifts,
+            'users'          => $users,
+            'shifts'         => $shifts,
+            'departments'    => $departments,
+            'defaultShiftId' => $defaultShiftId,
+            'perPage'        => $perPage,
         ]);
     }
 
     /**
-     * Excel import for bulk employees.
+     * Excel import for bulk employees (optional).
+     * Accepts .xlsx/.xls; your EmployeesImport should map to users table.
      */
     public function upload(Request $r)
     {
@@ -58,8 +76,8 @@ class EmployeeController extends Controller
     }
 
     /**
-     * Create a single employee.
-     * NOTE: uses first/middle/last fields (no `name` column).
+     * Create a single employee (uses users table).
+     * Sets default shift to the first ShiftWindow if not provided.
      */
     public function store(Request $r)
     {
@@ -71,10 +89,10 @@ class EmployeeController extends Controller
             'email'            => ['required','email', Rule::unique('users','email')],
             'temp_password'    => ['required','string','min:8'],
 
-            // keep as string to allow leading zeros (some IDs are school IDs)
-            'zkteco_user_id'   => ['nullable','string','max:64'],
+            'school_id'        => ['nullable','string','max:64', Rule::unique('users','school_id')],
+            'zkteco_user_id'   => ['nullable','string','max:64', Rule::unique('users','zkteco_user_id')],
 
-            'department'       => ['nullable','string','max:100'],
+            'department_id'    => ['nullable','integer','exists:departments,id'],
             'shift_window_id'  => ['nullable','integer','exists:shift_windows,id'],
             'flexi_start'      => ['nullable','date_format:H:i'],
             'flexi_end'        => ['nullable','date_format:H:i'],
@@ -88,25 +106,26 @@ class EmployeeController extends Controller
         $user->email           = $data['email'];
         $user->password        = Hash::make($data['temp_password']);
 
+        $user->school_id       = $data['school_id'] ?? null;
         $user->zkteco_user_id  = $data['zkteco_user_id'] ?? null;
-        $user->department      = $data['department'] ?? null;
-        $user->shift_window_id = $data['shift_window_id'] ?? null;
+
+        $user->department_id   = $data['department_id'] ?? null;
+        $user->shift_window_id = $data['shift_window_id']
+                               ?? ShiftWindow::orderBy('id')->value('id'); // default: first shift
         $user->flexi_start     = $data['flexi_start'] ?? null;
         $user->flexi_end       = $data['flexi_end'] ?? null;
         $user->active          = array_key_exists('active', $data) ? (bool)$data['active'] : true;
 
         $user->save();
 
-        // Optional: assign default role if using Spatie (uncomment if desired)
-        // if (class_exists(\Spatie\Permission\Models\Role::class)) {
-        //     $user->syncRoles(['Employee']);
-        // }
+        // Optional Spatie role assignment:
+        // $user->syncRoles(['Employee']);
 
         return back()->with('success', 'Employee created.');
     }
 
     /**
-     * Update minimal employee fields (optional helper).
+     * Update an employee.
      */
     public function update(Request $r, User $user)
     {
@@ -115,8 +134,11 @@ class EmployeeController extends Controller
             'middle_name'      => ['nullable','string','max:100'],
             'last_name'        => ['required','string','max:100'],
             'email'            => ['required','email', Rule::unique('users','email')->ignore($user->id)],
-            'zkteco_user_id'   => ['nullable','string','max:64'],
-            'department'       => ['nullable','string','max:100'],
+
+            'school_id'        => ['nullable','string','max:64', Rule::unique('users','school_id')->ignore($user->id)],
+            'zkteco_user_id'   => ['nullable','string','max:64', Rule::unique('users','zkteco_user_id')->ignore($user->id)],
+
+            'department_id'    => ['nullable','integer','exists:departments,id'],
             'shift_window_id'  => ['nullable','integer','exists:shift_windows,id'],
             'flexi_start'      => ['nullable','date_format:H:i'],
             'flexi_end'        => ['nullable','date_format:H:i'],
@@ -129,8 +151,11 @@ class EmployeeController extends Controller
             'middle_name'     => $data['middle_name'] ?? null,
             'last_name'       => $data['last_name'],
             'email'           => $data['email'],
+
+            'school_id'       => $data['school_id'] ?? null,
             'zkteco_user_id'  => $data['zkteco_user_id'] ?? null,
-            'department'      => $data['department'] ?? null,
+
+            'department_id'   => $data['department_id'] ?? null,
             'shift_window_id' => $data['shift_window_id'] ?? null,
             'flexi_start'     => $data['flexi_start'] ?? null,
             'flexi_end'       => $data['flexi_end'] ?? null,
