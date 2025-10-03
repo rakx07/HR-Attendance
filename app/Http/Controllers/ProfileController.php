@@ -23,16 +23,21 @@ class ProfileController extends Controller
 
     /**
      * Update the user's profile information.
+     * Works with first_name / middle_name / last_name (no single "name" field).
      */
     public function update(ProfileUpdateRequest $request): RedirectResponse
     {
-        $request->user()->fill($request->validated());
+        $user = $request->user();
 
-        if ($request->user()->isDirty('email')) {
-            $request->user()->email_verified_at = null;
+        // Only the validated fields will be mass-assigned.
+        $user->fill($request->validated());
+
+        // If email changed, mark as unverified
+        if ($user->isDirty('email')) {
+            $user->email_verified_at = null;
         }
 
-        $request->user()->save();
+        $user->save();
 
         return Redirect::route('profile.edit')->with('status', 'profile-updated');
     }
@@ -47,7 +52,6 @@ class ProfileController extends Controller
         ]);
 
         $user = $request->user();
-
         Auth::logout();
 
         $user->delete();

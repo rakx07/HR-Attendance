@@ -1,78 +1,77 @@
 <?php
 
-// app/Http/Controllers/AttendanceEditorController.php
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use App\Models\User;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Auth;
 
 class AttendanceEditorController extends Controller
 {
-    public function index(Request $r)
+    /**
+     * Simple editor: choose a user & date range, list attendance_days,
+     * and show a user dropdown (built from first/middle/last).
+     */
+    public function index(Request $request)
     {
-        $users = User::orderBy('name')->get(['id','name']);
-        return view('attendance.editor.index', ['users'=>$users]);
+        // Build a safe display name alias = "Last, First Middle"
+        $userSelect = DB::table('users')
+            ->select([
+                'id',
+                DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name,''))) as name"),
+            ])
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get();
+
+        // Optional filters
+        $userId = $request->integer('user_id') ?: null;
+        $from   = $request->date('from');
+        $to     = $request->date('to');
+
+        // Query attendance_days with joined user (for department + display name)
+        $rows = DB::table('attendance_days as ad')
+            ->join('users as u', 'u.id', '=', 'ad.user_id')
+            ->when($userId, fn ($q) => $q->where('ad.user_id', $userId))
+            ->when($from,   fn ($q) => $q->where('ad.work_date', '>=', $from->format('Y-m-d')))
+            ->when($to,     fn ($q) => $q->where('ad.work_date', '<=', $to->format('Y-m-d')))
+            ->orderByDesc('ad.work_date')
+            ->select([
+                'ad.*',
+                'u.department',
+                DB::raw("TRIM(CONCAT(u.last_name, ', ', u.first_name, ' ', COALESCE(u.middle_name,''))) as name"),
+            ])
+            ->paginate(25)
+            ->withQueryString();
+
+        return view('attendance.editor', [
+            'users' => $userSelect,
+            'rows'  => $rows,
+            'filters' => [
+                'user_id' => $userId,
+                'from'    => $from?->format('Y-m-d'),
+                'to'      => $to?->format('Y-m-d'),
+            ],
+        ]);
     }
 
-    public function edit(User $user, $date)
+    /**
+     * Example: save edits for a day (AM/PM times). Adjust to your needs.
+     */
+    public function update(Request $request, int $userId, string $workDate)
     {
-        $row = DB::table('attendance_days')->where('user_id',$user->id)->where('work_date',$date)->first();
-        return view('attendance.editor.edit', ['user'=>$user,'date'=>$date,'row'=>$row]);
-    }
-
-    public function update(Request $r, User $user, $date)
-    {
-        $data = $r->validate([
-            'am_in'  => 'nullable|date',
-            'am_out' => 'nullable|date',
-            'pm_in'  => 'nullable|date',
-            'pm_out' => 'nullable|date',
-            'reason' => 'nullable|string|max:255',
+        $data = $request->validate([
+            'am_in'  => ['nullable','date'],
+            'am_out' => ['nullable','date'],
+            'pm_in'  => ['nullable','date'],
+            'pm_out' => ['nullable','date'],
+            'status' => ['nullable','string','max:50'],
         ]);
 
-        $current = DB::table('attendance_days')->where('user_id',$user->id)->where('work_date',$date)->first();
-
-        // Audit each changed field
-        foreach (['am_in','am_out','pm_in','pm_out'] as $f) {
-            $new = $data[$f] ?? null;
-            $old = $current?->$f;
-            if ($new != $old) {
-                DB::table('attendance_adjustments')->insert([
-                    'user_id'=>$user->id,'work_date'=>$date,'field'=>$f,
-                    'old_value'=>$old,'new_value'=>$new,
-                    'edited_by'=>Auth::id(),'reason'=>$data['reason'] ?? null,
-                    'created_at'=>now(),'updated_at'=>now(),
-                ]);
-            }
-        }
-
-        // Save day record (recompute totals/late/under quickly)
-        $amIn = $data['am_in'] ? Carbon::parse($data['am_in']) : null;
-        $amOut= $data['am_out']? Carbon::parse($data['am_out']): null;
-        $pmIn = $data['pm_in'] ? Carbon::parse($data['pm_in']) : null;
-        $pmOut= $data['pm_out']? Carbon::parse($data['pm_out']): null;
-
-        $mins = 0;
-        if($amIn && $amOut) $mins += $amIn->diffInMinutes($amOut);
-        if($pmIn && $pmOut) $mins += $pmIn->diffInMinutes($pmOut);
-        $hours = min(round($mins/60,2), (float)config('attendance.cap_hours_per_day',8));
-
-        $status = (!$amIn && !$pmOut) ? 'Absent' : ($amIn && !$pmOut ? 'Incomplete' : 'Present');
-
         DB::table('attendance_days')->updateOrInsert(
-            ['user_id'=>$user->id,'work_date'=>$date],
-            [
-                'am_in'=>$amIn,'am_out'=>$amOut,'pm_in'=>$pmIn,'pm_out'=>$pmOut,
-                'late_minutes'=>0, // (optional) compute against shift windows if needed
-                'undertime_minutes'=>0,
-                'total_hours'=>$hours,'status'=>$status,
-                'updated_at'=>now(),'created_at'=>now()
-            ]
+            ['user_id' => $userId, 'work_date' => $workDate],
+            array_merge($data, ['updated_at' => now(), 'created_at' => now()])
         );
 
-        return back()->with('success','Attendance updated with audit trail.');
+        return back()->with('status', 'Attendance updated.');
     }
 }
