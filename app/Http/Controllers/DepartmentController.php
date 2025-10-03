@@ -11,12 +11,43 @@ use Illuminate\Support\Facades\DB;
 class DepartmentController extends Controller
 {
     // List + create form
-    public function index()
-    {
-        return view('departments.index', [
-            'rows' => Department::orderBy('name')->paginate(20),
-        ]);
-    }
+    public function index(Request $r)
+{
+    $q = trim((string) $r->query('q', ''));
+
+    // Active users only, searchable, alphabetical
+    $users = User::query()
+        ->where('active', true)
+        ->when($q !== '', function ($x) use ($q) {
+            $x->where(function ($y) use ($q) {
+                $y->where('last_name', 'like', "%{$q}%")
+                  ->orWhere('first_name', 'like', "%{$q}%")
+                  ->orWhere('email', 'like', "%{$q}%");
+            });
+        })
+        ->orderBy('last_name')
+        ->orderBy('first_name')
+        ->paginate(20)
+        ->withQueryString();
+
+    // Only active departments for the transfer dropdown
+    $activeDepts = Department::where('active', true)
+        ->orderBy('name')
+        ->get(['id','name']);
+
+    // All departments for the Manage modal (own paginator so it doesn’t clash)
+    $allDepts = Department::orderBy('name')
+        ->paginate(15, ['*'], 'dept_page')
+        ->withQueryString();
+
+    return view('departments.index', [
+        'users'      => $users,
+        'activeDepts'=> $activeDepts,
+        'allDepts'   => $allDepts,
+        'q'          => $q,
+    ]);
+}
+
 
     public function store(Request $r)
     {
