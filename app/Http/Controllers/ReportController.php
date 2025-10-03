@@ -32,7 +32,7 @@ class ReportController extends Controller
      * - from, to:         Y-m-d
      * - dept:             department string (users.department)
      * - employee_id:      numeric user id
-     * - status:           Present | Absent | Incomplete (or Holiday if show_holidays=1)
+     * - status:           Present | Absent | Incomplete | Holiday
      * - include_inactive: 1 to include inactive users (default 0 = only active)
      * - show_holidays:    1 to include non-working holidays (no scans) labeled "Holiday"
      */
@@ -43,6 +43,9 @@ class ReportController extends Controller
         $to              = $r->filled('to')   ? $r->to   : null;   // Y-m-d
         $includeInactive = (bool) $r->boolean('include_inactive', false);
         $showHolidays    = (bool) $r->boolean('show_holidays', false);
+
+        // Inline numeric flag to avoid named bindings in DB::raw
+        $flag = $showHolidays ? 1 : 0;
 
         // Aliases:
         // ad = attendance_days, u = users, hc = holiday_calendars, hd = holiday_dates
@@ -55,7 +58,7 @@ class ReportController extends Controller
             // Active holiday calendar for the year of the work_date
             ->leftJoin('holiday_calendars as hc', function ($j) {
                 $j->on(DB::raw('YEAR(ad.work_date)'), '=', DB::raw('hc.year'))
-                  ->where('hc.status', 'active');
+                  ->where('hc.status', 'active'); // enum('draft','active')
             })
             // Join only non-working holiday entries for that exact date
             ->leftJoin('holiday_dates as hd', function ($j) {
@@ -112,16 +115,17 @@ class ReportController extends Controller
             'ad.total_hours',
 
             // Show "Holiday" when it's a non-working holiday with no scans AND show_holidays=1.
+            // Important: use the inlined $flag (0/1) — no named parameter here.
             DB::raw("
                 CASE
-                  WHEN (:showHolidays = 1) AND hd.id IS NOT NULL
+                  WHEN ($flag = 1) AND hd.id IS NOT NULL
                        AND ad.am_in IS NULL AND ad.am_out IS NULL
                        AND ad.pm_in IS NULL AND ad.pm_out IS NULL
                   THEN 'Holiday'
                   ELSE ad.status
                 END as status
             "),
-        ])->addBinding($showHolidays ? 1 : 0, 'select'); // bind :showHolidays
+        ]);
 
         return $q;
     }

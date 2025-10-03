@@ -17,6 +17,7 @@ class DatabaseSeeder extends Seeder
             AttendanceRawSeeder::class,
             FakePunchesSeeder::class,
             ShiftPresetsSeeder::class,
+            HolidaysPermissionSeeder::class,
         ]);
     }
 }
