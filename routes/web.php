@@ -56,7 +56,15 @@ Route::middleware(['auth','permission:attendance.edit'])->group(function () {
     Route::get('/attendance/editor', [AttendanceEditorController::class,'index'])->name('attendance.editor');
     Route::get('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'edit'])->name('attendance.editor.edit');
     Route::post('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'update'])->name('attendance.editor.update');
+
+    
 });
+Route::middleware(['auth','permission:attendance.edit'])->group(function () {
+    Route::get('/attendance/editor', [AttendanceEditorController::class,'index'])->name('attendance.editor');
+    Route::get('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'edit'])->name('attendance.editor.edit');
+    Route::post('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'update'])->name('attendance.editor.update');
+});
+
 
 // Breeze/Fortify/Jetstream auth routes
 require __DIR__.'/auth.php';
