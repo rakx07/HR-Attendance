@@ -11,10 +11,15 @@ class ShiftWindow extends Model
 
     protected $fillable = [
         'name',
-        'am_in_start', 'am_in_end',
-        'am_out_start', 'am_out_end',
-        'pm_in_start', 'pm_in_end',
-        'pm_out_start', 'pm_out_end',
+        'am_in_start','am_in_end',
+        'am_out_start','am_out_end',
+        'pm_in_start','pm_in_end',
+        'pm_out_start','pm_out_end',
         'grace_minutes',
     ];
+
+    public function days()
+    {
+        return $this->hasMany(ShiftWindowDay::class);
+    }
 }

@@ -16,6 +16,7 @@ class DatabaseSeeder extends Seeder
             ZktecoUsersSeeder::class,
             AttendanceRawSeeder::class,
             FakePunchesSeeder::class,
+            ShiftPresetsSeeder::class,
         ]);
     }
 }

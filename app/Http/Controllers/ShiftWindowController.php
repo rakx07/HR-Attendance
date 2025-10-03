@@ -1,6 +1,5 @@
 <?php
 
-// app/Http/Controllers/ShiftWindowController.php
 namespace App\Http\Controllers;
 
 use App\Models\ShiftWindow;
@@ -11,15 +10,13 @@ class ShiftWindowController extends Controller
 {
     public function index()
     {
-        $rows = ShiftWindow::query()
-            ->orderBy('name')
-            ->paginate(20);
-
+        $rows = ShiftWindow::withCount('days')->orderBy('name')->paginate(20);
         return view('shiftwindows.index', ['rows' => $rows]);
     }
 
     public function create()
     {
+        // empty model; blade will show default Mon–Fri working
         return view('shiftwindows.form', ['sw' => new ShiftWindow()]);
     }
 
@@ -28,15 +25,20 @@ class ShiftWindowController extends Controller
         $data = $this->validateData($r);
         $data = $this->normalizeTimes($data);
 
-        ShiftWindow::create($data);
+        $sw = ShiftWindow::create($data);
 
-        return redirect()
-            ->route('shiftwindows.index')
-            ->with('success', 'Created.');
+        // per-day rules
+        $days = $this->validateDays($r);
+        foreach ($days as $dow => $row) {
+            $sw->days()->create(array_merge(['dow' => $dow], $row));
+        }
+
+        return redirect()->route('shiftwindows.index')->with('success', 'Created.');
     }
 
     public function edit(ShiftWindow $shiftwindow)
     {
+        $shiftwindow->load('days');
         return view('shiftwindows.form', ['sw' => $shiftwindow]);
     }
 
@@ -47,29 +49,26 @@ class ShiftWindowController extends Controller
 
         $shiftwindow->update($data);
 
-        return redirect()
-            ->route('shiftwindows.index')
-            ->with('success', 'Updated.');
+        $days = $this->validateDays($r);
+        foreach ($days as $dow => $row) {
+            $shiftwindow->days()->updateOrCreate(['dow' => $dow], $row);
+        }
+
+        return redirect()->route('shiftwindows.index')->with('success', 'Updated.');
     }
 
     public function destroy(ShiftWindow $shiftwindow)
     {
         $shiftwindow->delete();
-
         return back()->with('success', 'Deleted.');
     }
 
-    /**
-     * Validate input; on update, allow keeping the same name.
-     */
+    /** ───────────────── helpers ───────────────── */
+
     private function validateData(Request $r, ?ShiftWindow $existing = null): array
     {
-        $nameRule = ['required', 'string', 'max:191'];
-        $nameRule[] = Rule::unique('shift_windows', 'name')
-            ->ignore($existing?->id);
-
-        // Your migration uses TIME columns; enforce H:i and we’ll normalize to H:i:s
-        $timeRule = ['required', 'date_format:H:i'];
+        $nameRule = ['required','string','max:191', Rule::unique('shift_windows','name')->ignore($existing?->id)];
+        $timeRule = ['required','date_format:H:i'];
 
         return $r->validate([
             'name'          => $nameRule,
@@ -81,13 +80,10 @@ class ShiftWindowController extends Controller
             'pm_in_end'     => $timeRule,
             'pm_out_start'  => $timeRule,
             'pm_out_end'    => $timeRule,
-            'grace_minutes' => ['required', 'integer', 'min:0'],
+            'grace_minutes' => ['required','integer','min:0'],
         ]);
     }
 
-    /**
-     * Convert H:i to H:i:s for TIME columns (DB accepts both, but keeping it consistent).
-     */
     private function normalizeTimes(array $data): array
     {
         foreach ([
@@ -101,5 +97,33 @@ class ShiftWindowController extends Controller
             }
         }
         return $data;
+    }
+
+    /** Parse weekly grid posted as days[dow][...] */
+    private function validateDays(Request $r): array
+    {
+        $days = $r->input('days', []);
+        $out  = [];
+        for ($d = 1; $d <= 7; $d++) {
+            $row = $days[$d] ?? [];
+            $out[$d] = [
+                'is_working' => (bool)($row['is_working'] ?? 0),
+                'am_in'  => $this->hhmm($row['am_in']  ?? null),
+                'am_out' => $this->hhmm($row['am_out'] ?? null),
+                'pm_in'  => $this->hhmm($row['pm_in']  ?? null),
+                'pm_out' => $this->hhmm($row['pm_out'] ?? null),
+            ];
+        }
+        return $out;
+    }
+
+    private function hhmm(?string $v): ?string
+    {
+        if (!$v) return null;
+        if (preg_match('/^\d{1,2}(:\d{1,2})?$/', $v)) {
+            [$h,$m] = array_pad(explode(':', $v, 2), 2, '00');
+            return sprintf('%02d:%02d:00', (int)$h % 24, (int)$m % 60);
+        }
+        return strlen($v) === 5 ? $v . ':00' : $v; // already H:i or H:i:s
     }
 }
