@@ -12,22 +12,78 @@ class AttendanceEditorController extends Controller
      * GET /attendance/editor
      * Show the user/date picker.
      */
-    public function index(Request $request)
-    {
-        // Build a safe display name = "Last, First Middle"
-        $users = DB::table('users')
-            ->select([
-                'id',
-                DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name,''))) AS name"),
-            ])
-            ->orderBy('last_name')
-            ->orderBy('first_name')
-            ->get();
+    // app/Http/Controllers/AttendanceEditorController.php
 
-        return view('attendance.editor.index', [
-            'users' => $users,
-        ]);
+public function index(Request $request)
+{
+    // Build picker list: "Last, First Middle"
+    $users = DB::table('users')
+        ->select([
+            'id',
+            DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name,''))) AS name"),
+        ])
+        ->orderBy('last_name')->orderBy('first_name')
+        ->get();
+
+    $userId = (int) $request->query('user_id', 0) ?: null;
+    $mode   = $request->query('range', 'day'); // day|week|month|custom
+    $asof   = $request->query('date');         // anchor date for day/week/month
+    $fromQ  = $request->query('from');
+    $toQ    = $request->query('to');
+
+    $from = $to = null;
+
+    // Compute window
+    if ($mode === 'custom' && $fromQ && $toQ) {
+        $from = \Carbon\Carbon::parse($fromQ)->startOfDay();
+        $to   = \Carbon\Carbon::parse($toQ)->endOfDay();
+    } else {
+        $anchor = $asof ? \Carbon\Carbon::parse($asof) : \Carbon\Carbon::today();
+        switch ($mode) {
+            case 'week':
+                $from = $anchor->copy()->startOfWeek(); // Mon
+                $to   = $anchor->copy()->endOfWeek();   // Sun
+                break;
+            case 'month':
+                $from = $anchor->copy()->startOfMonth();
+                $to   = $anchor->copy()->endOfMonth();
+                break;
+            case 'day':
+            default:
+                $from = $anchor->copy()->startOfDay();
+                $to   = $anchor->copy()->endOfDay();
+                break;
+        }
     }
+
+    $rows = collect(); // empty by default
+    if ($userId) {
+        $rows = DB::table('attendance_days as ad')
+            ->where('ad.user_id', $userId)
+            ->when($from, fn($q) => $q->where('ad.work_date', '>=', $from->toDateString()))
+            ->when($to,   fn($q) => $q->where('ad.work_date', '<=', $to->toDateString()))
+            ->orderByDesc('ad.work_date')       // newest first
+            ->select([
+                'ad.work_date','ad.am_in','ad.am_out','ad.pm_in','ad.pm_out',
+                'ad.late_minutes','ad.undertime_minutes','ad.total_hours','ad.status',
+            ])
+            ->paginate(20)
+            ->withQueryString();
+    }
+
+    return view('attendance.editor.index', [
+        'users' => $users,
+        'rows'  => $rows,
+        'filters' => [
+            'user_id' => $userId,
+            'range'   => $mode,
+            'date'    => $asof ?: now()->toDateString(),
+            'from'    => $from?->toDateString(),
+            'to'      => $to?->toDateString(),
+        ],
+    ]);
+}
+
 
     /**
      * GET /attendance/editor/{user}/{date}
