@@ -99,14 +99,24 @@
                       {{ $u->active ? 'Active' : 'Inactive' }}
                     </span>
                   </td>
-                  <td class="p-2 text-center">
+                 <td class="p-2 text-center">
                     <button
-                      type="button"
-                      class="px-2 py-1 rounded bg-yellow-500 hover:bg-yellow-600 text-white"
-                      data-modal-target="editEmployeeModal-{{ $u->id }}">
-                      Edit
+                        type="button"
+                        class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-700 shadow
+                            focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-400"
+                        data-modal-target="editEmployeeModal-{{ $u->id }}"
+                        aria-label="Edit"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg"
+                            class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"/>
+                        <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                        </svg>
                     </button>
-                  </td>
+                    </td>
+
+
                 </tr>
 
                 {{-- Edit Modal (one per row) --}}
