@@ -18,8 +18,12 @@ return new class extends Migration
             $t->dateTime('punched_at')->index();
 
             // Optional, but very helpful for multi-terminal environments
-            $t->string('device_sn')->nullable()->index();               // terminal serial no / identifier
-            $t->enum('source', ['pull','push','manual'])->default('pull');
+            $t->string('device_sn')->nullable()->index(); // terminal serial no / identifier
+
+            // Source of the log: allow more values for testing
+            $t->string('source', 20)->default('pull'); 
+            // e.g. pull (from device), push (device sends), manual (encoded),
+            // seed/mock (for testing)
 
             // Optional metadata
             $t->string('punch_type')->nullable(); // in/out if device provides, else null

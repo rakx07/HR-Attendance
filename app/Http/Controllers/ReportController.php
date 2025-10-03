@@ -20,7 +20,9 @@ class ReportController extends Controller
             ->when($r->filled('from'), fn($x)=>$x->where('work_date','>=',$r->from))
             ->when($r->filled('to'), fn($x)=>$x->where('work_date','<=',$r->to))
             ->select(
-                'users.id as user_id','users.name','users.department',
+                'users.id as user_id',
+                DB::raw("CONCAT(users.last_name, ', ', users.first_name, ' ', COALESCE(users.middle_name,'')) as name"),
+                'users.department',
                 'work_date','am_in','am_out','pm_in','pm_out',
                 'late_minutes','undertime_minutes','total_hours','status'
             )
@@ -37,4 +39,3 @@ class ReportController extends Controller
         return Excel::download(new AttendanceExport($r->all()), $filename);
     }
 }
-
