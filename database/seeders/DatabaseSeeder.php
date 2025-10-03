@@ -13,6 +13,8 @@ class DatabaseSeeder extends Seeder
             ShiftWindowSeeder::class,
             AdminUserSeeder::class,
             SampleDataSeeder::class,
+            ZktecoUsersSeeder::class,
+            AttendanceRawSeeder::class,
         ]);
     }
 }
