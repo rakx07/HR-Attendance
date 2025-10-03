@@ -44,12 +44,6 @@
       Employees
     </a>
 
-    @can('employees.import')
-    <a href="{{ route('employees.index') }}#upload"
-      class="block px-3 py-2 rounded hover:bg-gray-50">
-      Upload Template
-    </a>
-    @endcan
 
     @can('schedules.manage')
     <a href="{{ route('shiftwindows.index') }}"
