@@ -11,12 +11,38 @@ class ReportController extends Controller
 {
     public function index(Request $r)
     {
-        $employeeId = $r->filled('employee_id') ? (int) $r->employee_id : null;
-        $from       = $r->filled('from') ? $r->from : null;   // expect Y-m-d
-        $to         = $r->filled('to')   ? $r->to   : null;   // expect Y-m-d
+        $rows = $this->baseQuery($r)
+            ->orderByDesc('attendance_days.work_date')
+            ->paginate(50)
+            ->withQueryString();
 
-        $q = DB::table('attendance_days')
+        return view('reports.attendance', ['rows' => $rows]);
+    }
+
+    public function export(Request $r)
+    {
+        $filename = 'attendance_' . now()->format('Ymd_His') . '.xlsx';
+        // Pass the built query params to the export class (unchanged on your side)
+        return Excel::download(new AttendanceExport($r->all()), $filename);
+    }
+
+    /**
+     * Build the common query. By default it shows ONLY active users.
+     * If you ever need to include inactive, pass ?include_inactive=1 in the URL.
+     */
+    protected function baseQuery(Request $r)
+    {
+        $employeeId = $r->filled('employee_id') ? (int) $r->employee_id : null;
+        $from       = $r->filled('from') ? $r->from : null;   // Y-m-d
+        $to         = $r->filled('to')   ? $r->to   : null;   // Y-m-d
+        $includeInactive = (bool) $r->boolean('include_inactive', false);
+
+        return DB::table('attendance_days')
             ->join('users', 'users.id', '=', 'attendance_days.user_id')
+
+            // <<< KEY LINE: only active users unless include_inactive=1 >>>
+            ->when(!$includeInactive, fn ($x) => $x->where('users.active', 1))
+
             ->when($employeeId, fn ($x) => $x->where('users.id', $employeeId))
             ->when($r->filled('status'), fn ($x) => $x->where('attendance_days.status', $r->status))
             ->when($r->filled('dept'), fn ($x) => $x->where('users.department', $r->dept))
@@ -35,17 +61,6 @@ class ReportController extends Controller
                 'attendance_days.undertime_minutes',
                 'attendance_days.total_hours',
                 'attendance_days.status'
-            )
-            ->orderByDesc('attendance_days.work_date');
-
-        return view('reports.attendance', [
-            'rows' => $q->paginate(50)->withQueryString(),
-        ]);
-    }
-
-    public function export(Request $r)
-    {
-        $filename = 'attendance_' . now()->format('Ymd_His') . '.xlsx';
-        return Excel::download(new AttendanceExport($r->all()), $filename);
+            );
     }
 }
