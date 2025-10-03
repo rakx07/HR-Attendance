@@ -33,13 +33,19 @@ Route::middleware('auth')->group(function () {
 });
 
 // Employees (restricted by role)
+// Employees (same auth/role group you already use)
 Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(function () {
     Route::get('/employees', [EmployeeController::class,'index'])->name('employees.index');
-    Route::post('/employees/upload', [EmployeeController::class,'upload'])->name('employees.upload');
-    Route::post('/employees', [EmployeeController::class,'store'])->name('employees.store');
     Route::patch('/employees/{user}', [EmployeeController::class,'update'])->name('employees.update');
 
+    // NEW: upload page + template download + import
+    Route::get('/employees/upload', [EmployeeController::class,'uploadPage'])->name('employees.upload.page');
+    Route::get('/employees/template', [EmployeeController::class,'downloadTemplate'])->name('employees.template');
+    Route::post('/employees/upload', [EmployeeController::class,'upload'])->name('employees.upload');
+
+    Route::post('/employees', [EmployeeController::class,'store'])->name('employees.store');
 });
+
 
 // Reports (restricted by permission)
 Route::middleware(['auth','permission:reports.view.org'])

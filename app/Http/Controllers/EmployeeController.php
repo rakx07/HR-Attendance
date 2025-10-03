@@ -63,6 +63,22 @@ class EmployeeController extends Controller
             'perPage'        => $perPage,
         ]);
     }
+   // Show the upload page (with quick-create + import form)
+public function uploadPage()
+{
+    $users   = \App\Models\User::orderBy('last_name')->paginate(10);
+    $shifts  = \App\Models\ShiftWindow::orderBy('name')->get(['id','name']);
+    return view('employees.upload', compact('users','shifts'));
+}
+
+// Download a clean Excel template (headings only)
+public function downloadTemplate()
+{
+    // requires Maatwebsite\Excel
+    return \Maatwebsite\Excel\Facades\Excel::download(new \App\Exports\EmployeesTemplateExport, 'employee_upload_template.xlsx');
+}
+
+
 
     /**
      * Excel import for bulk employees (optional).

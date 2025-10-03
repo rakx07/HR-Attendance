@@ -61,6 +61,11 @@
               data-modal-target="addEmployeeModal">
               Add Employee
             </button>
+                    <a href="{{ route('employees.upload.page') }}"
+          class="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white">
+          Upload / Import
+        </a>
+
           </div>
         </div>
 
