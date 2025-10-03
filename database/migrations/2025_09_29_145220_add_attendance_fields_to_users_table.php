@@ -12,7 +12,10 @@ return new class extends Migration {
                 $t->unsignedInteger('zkteco_user_id')->nullable()->index();
             }
             if (!Schema::hasColumn('users', 'shift_window_id')) {
-                $t->foreignId('shift_window_id')->nullable()->constrained('shift_windows');
+                $t->foreignId('shift_window_id')
+                  ->nullable()
+                  ->constrained('shift_windows')
+                  ->nullOnDelete(); // if a shift is removed, keep user, set null
             }
             if (!Schema::hasColumn('users', 'flexi_start')) {
                 $t->time('flexi_start')->nullable();
