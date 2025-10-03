@@ -6,6 +6,8 @@ use App\Http\Controllers\EmployeeController;
 use App\Http\Controllers\ShiftWindowController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AttendanceEditorController;
+use App\Http\Controllers\DepartmentController;
+
 
 /*
 |--------------------------------------------------------------------------
@@ -57,7 +59,7 @@ Route::middleware(['auth','permission:attendance.edit'])->group(function () {
     Route::get('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'edit'])->name('attendance.editor.edit');
     Route::post('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'update'])->name('attendance.editor.update');
 
-    
+
 });
 Route::middleware(['auth','permission:attendance.edit'])->group(function () {
     Route::get('/attendance/editor', [AttendanceEditorController::class,'index'])->name('attendance.editor');
@@ -65,6 +67,17 @@ Route::middleware(['auth','permission:attendance.edit'])->group(function () {
     Route::post('/attendance/editor/{user}/{date}', [AttendanceEditorController::class,'update'])->name('attendance.editor.update');
 });
 
+
+Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(function () {
+    Route::get('/departments', [DepartmentController::class, 'index'])->name('departments.index');
+    Route::post('/departments', [DepartmentController::class, 'store'])->name('departments.store');
+    Route::patch('/departments/{department}', [DepartmentController::class, 'update'])->name('departments.update');
+    Route::delete('/departments/{department}', [DepartmentController::class, 'destroy'])->name('departments.destroy');
+
+    // transfers
+    Route::post('/departments/transfer', [DepartmentController::class, 'transfer'])->name('departments.transfer');
+    Route::get('/departments/history/{user}', [DepartmentController::class, 'history'])->name('departments.history');
+});
 
 // Breeze/Fortify/Jetstream auth routes
 require __DIR__.'/auth.php';

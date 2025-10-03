@@ -31,4 +31,14 @@ class User extends Authenticatable
     {
         return $this->belongsTo(ShiftWindow::class, 'shift_window_id');
     }
+    public function department()
+    {
+        return $this->belongsTo(\App\Models\Department::class);
+    }
+
+    public function departmentTransfers()
+    {
+        return $this->hasMany(\App\Models\DepartmentTransfer::class);
+    }
+
 }

@@ -34,36 +34,47 @@
     @endcan
 
     {{-- HR Officer modules --}}
-    @role('HR Officer|Administrator|IT Admin')
-    <div>
-      <div class="px-3 text-gray-500 uppercase text-xs mb-1">HR Modules</div>
-      <a href="{{ route('employees.index') }}"
-         class="block px-3 py-2 rounded {{ request()->routeIs('employees.*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
-        Employees
-      </a>
+    {{-- HR Officer modules --}}
+  @role('HR Officer|Administrator|IT Admin')
+  <div>
+    <div class="px-3 text-gray-500 uppercase text-xs mb-1">HR Modules</div>
 
-      @can('employees.import')
-      <a href="{{ route('employees.index') }}#upload"
-         class="block px-3 py-2 rounded hover:bg-gray-50">
-        Upload Template
-      </a>
-      @endcan
+    <a href="{{ route('employees.index') }}"
+      class="block px-3 py-2 rounded {{ request()->routeIs('employees.*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Employees
+    </a>
 
-      @can('schedules.manage')
-      <a href="{{ route('shiftwindows.index') }}"
-         class="block px-3 py-2 rounded {{ request()->routeIs('shiftwindows.*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
-        Duty Schedules
-      </a>
-      @endcan
+    @can('employees.import')
+    <a href="{{ route('employees.index') }}#upload"
+      class="block px-3 py-2 rounded hover:bg-gray-50">
+      Upload Template
+    </a>
+    @endcan
 
-      @can('attendance.edit')
-      <a href="{{ route('attendance.editor') }}"
-         class="block px-3 py-2 rounded {{ request()->routeIs('attendance.editor*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
-        Edit Attendance
-      </a>
-      @endcan
-    </div>
-    @endrole
+    @can('schedules.manage')
+    <a href="{{ route('shiftwindows.index') }}"
+      class="block px-3 py-2 rounded {{ request()->routeIs('shiftwindows.*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Duty Schedules
+    </a>
+    @endcan
+
+    {{-- NEW: Departments --}}
+    @can('departments.manage')
+    <a href="{{ route('departments.index') }}"
+      class="block px-3 py-2 rounded {{ request()->routeIs('departments.*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Departments
+    </a>
+    @endcan
+
+    @can('attendance.edit')
+    <a href="{{ route('attendance.editor') }}"
+      class="block px-3 py-2 rounded {{ request()->routeIs('attendance.editor*') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Edit Attendance
+    </a>
+    @endcan
+  </div>
+  @endrole
+
 
     {{-- Admin / IT (optional extra area) --}}
     @role('Administrator|IT Admin')
