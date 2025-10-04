@@ -66,8 +66,8 @@ class EmployeeController extends Controller
    // Show the upload page (with quick-create + import form)
 public function uploadPage()
 {
-    $users   = \App\Models\User::orderBy('last_name')->paginate(10);
-    $shifts  = \App\Models\ShiftWindow::orderBy('name')->get(['id','name']);
+    $users   = User::orderBy('last_name')->paginate(10);
+    $shifts  = ShiftWindow::orderBy('name')->get(['id','name']);
     return view('employees.upload', compact('users','shifts'));
 }
 
@@ -75,7 +75,7 @@ public function uploadPage()
 public function downloadTemplate()
 {
     // requires Maatwebsite\Excel
-    return \Maatwebsite\Excel\Facades\Excel::download(new \App\Exports\EmployeesTemplateExport, 'employee_upload_template.xlsx');
+    return Excel::download(new \App\Exports\EmployeesTemplateExport, 'employee_upload_template.xlsx');
 }
 
 
