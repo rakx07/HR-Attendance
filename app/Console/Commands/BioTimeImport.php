@@ -16,7 +16,7 @@ class BioTimeImport extends Command
         {--summary : Print imported rows}
         {--dry : Don’t write to DB (preview)}';
 
-    protected $description = 'Import BioTime iclock_transaction rows into attendance_raw (schema-aware)';
+    protected $description = 'Import BioTime iclock_transaction rows into attendance_raw (device_user_id = emp_code)';
 
     public function handle(): int
     {
@@ -31,14 +31,13 @@ class BioTimeImport extends Command
         $summary = (bool)$this->option('summary');
         $dry     = (bool)$this->option('dry');
 
-        $this->info("BioTime import window: {$from->toDateTimeString()} → {$to->toDateTimeString()}");
+        $this->info("BioTime import window: {$from} → {$to}");
 
-        // Which columns exist in attendance_raw? (based on your list)
         $has = fn(string $c) => Schema::hasColumn('attendance_raw', $c);
 
-        // Build user maps (for linking)
-        $byZkId     = DB::table('users')->whereNotNull('zkteco_user_id')->pluck('id','zkteco_user_id')->toArray();
-        $bySchoolId = DB::table('users')->whereNotNull('school_id')->pluck('id','school_id')->toArray();
+        // Maps for linking
+        $bySchoolId = DB::table('users')->whereNotNull('school_id')->pluck('id','school_id')->toArray();     // primary
+        $byZkId     = DB::table('users')->whereNotNull('zkteco_user_id')->pluck('id','zkteco_user_id')->toArray(); // fallback
 
         $imported = 0;
 
@@ -46,8 +45,8 @@ class BioTimeImport extends Command
             ->table('iclock_transaction')
             ->select([
                 'id',
-                'emp_id',       // numeric in many builds; may be null
-                'emp_code',     // string code; we map to users.school_id
+                'emp_id',
+                'emp_code',
                 'punch_time',
                 'punch_state',
                 'verify_type',
@@ -55,21 +54,22 @@ class BioTimeImport extends Command
             ])
             ->whereBetween('punch_time', [$from, $to])
             ->orderBy('punch_time')
-            ->chunkById(1000, function ($rows) use ($summary, $dry, $has, $byZkId, $bySchoolId, &$imported) {
+            ->chunkById(1000, function ($rows) use ($summary, $dry, $has, $bySchoolId, $byZkId, &$imported) {
 
                 foreach ($rows as $r) {
                     if (empty($r->punch_time)) continue;
+
                     $ts = Carbon::parse($r->punch_time);
 
-                    // Stable identifier for de-dup: prefer emp_id; else hash of emp_code
-                    $deviceUserId = !is_null($r->emp_id) ? (string)$r->emp_id : (string)crc32((string)$r->emp_code);
+                    // ✅ device_user_id = emp_code (so it matches users.school_id)
+                    $deviceUserId = (string)$r->emp_code;
 
-                    // Resolve user_id
+                    // Link to users: prefer school_id==emp_code; fallback to zkteco_user_id==emp_id
                     $userId = null;
-                    if (!is_null($r->emp_id) && isset($byZkId[(string)$r->emp_id])) {
-                        $userId = (int)$byZkId[(string)$r->emp_id];
-                    } elseif (!empty($r->emp_code) && isset($bySchoolId[$r->emp_code])) {
+                    if (!empty($r->emp_code) && isset($bySchoolId[$r->emp_code])) {
                         $userId = (int)$bySchoolId[$r->emp_code];
+                    } elseif (!is_null($r->emp_id) && isset($byZkId[(string)$r->emp_id])) {
+                        $userId = (int)$byZkId[(string)$r->emp_id];
                     }
 
                     if ($summary) {
@@ -84,7 +84,7 @@ class BioTimeImport extends Command
 
                     if ($dry) { $imported++; continue; }
 
-                    // Build payload ONLY with columns your table has
+                    // Build row with only existing columns
                     $row = [
                         'device_user_id' => $deviceUserId,
                         'punched_at'     => $ts,
