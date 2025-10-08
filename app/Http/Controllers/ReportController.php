@@ -6,30 +6,35 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\AttendanceExport;
-use Barryvdh\DomPDF\Facade\Pdf; // ← ADD: PDF export
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class ReportController extends Controller
 {
     public function index(Request $r)
-{
-    // Fetch all active users (employees)
-    $employees = DB::table('users')
-        ->select('id', DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''))) as name"), 'department')
-        ->where('active', 1)
-        ->orderBy('name')
-        ->get();
+    {
+        // Employees dropdown (active by default)
+        $employees = DB::table('users')
+            ->select(
+                'id',
+                DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''))) AS name"),
+                'department'
+            )
+            ->where('active', 1)
+            ->orderBy('name')
+            ->get();
 
-    $rows = $this->baseQuery($r)
-        ->orderByDesc('ad.work_date')
-        ->paginate(50)
-        ->withQueryString();
+        $rows = $this->baseQuery($r)
+            ->orderBy('u.department')
+            ->orderBy('u.id')
+            ->orderByDesc('ad.work_date')
+            ->paginate(50)
+            ->withQueryString();
 
-    return view('reports.attendance', [
-        'rows' => $rows,
-        'employees' => $employees, // 👈 pass this to the Blade
-    ]);
-}
-
+        return view('reports.attendance', [
+            'rows' => $rows,
+            'employees' => $employees,
+        ]);
+    }
 
     public function export(Request $r)
     {
@@ -37,100 +42,102 @@ class ReportController extends Controller
         return Excel::download(new AttendanceExport($r->all()), $filename);
     }
 
-    // ← ADD: PDF print/preview (uses the same filters via baseQuery)
     public function pdf(Request $r)
-{
-    $rows = $this->baseQuery($r)
-        ->orderBy('u.department')
-        ->orderBy('u.id')
-        ->orderBy('ad.work_date')
-        ->get(); // Collection -> we will group in the Blade
+    {
+        $rows = $this->baseQuery($r)
+            ->orderBy('u.department')
+            ->orderBy('u.id')
+            ->orderBy('ad.work_date')
+            ->get();
 
-    $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.attendance_pdf', [
-        'rows'    => $rows,
-        'filters' => $r->all(),
-    ])->setPaper('letter', 'portrait'); // ← letter size
+        $pdf = Pdf::loadView('reports.attendance_pdf', [
+            'rows'    => $rows,
+            'filters' => $r->all(),
+        ])->setPaper('letter', 'portrait');
 
-    return $pdf->stream('attendance_'.now()->format('Ymd_His').'.pdf');
-}
+        return $pdf->stream('attendance_' . now()->format('Ymd_His') . '.pdf');
+    }
 
-
-    /**
-     * Build the common query for attendance reports.
-     *
-     * Query params:
-     * - from, to:         Y-m-d
-     * - dept:             department string (users.department)
-     * - employee_id:      numeric user id
-     * - status:           Present | Absent | Incomplete | Holiday
-     * - include_inactive: 1 to include inactive users (default 0 = only active)
-     * - show_holidays:    1 to include non-working holidays (no scans) labeled "Holiday"
-     */
     protected function baseQuery(Request $r)
     {
-        $employeeId      = $r->filled('employee_id') ? (int) $r->employee_id : null;
+        $mode            = $r->input('mode', 'all_active'); // <-- NEW: respect mode
+        $employeeIdParam = $r->filled('employee_id') ? (int) $r->employee_id : null;
+        $employeeId      = ($mode === 'employee') ? $employeeIdParam : null; // <-- ONLY when mode=employee
+
         $from            = $r->filled('from') ? $r->from : null;   // Y-m-d
         $to              = $r->filled('to')   ? $r->to   : null;   // Y-m-d
         $includeInactive = (bool) $r->boolean('include_inactive', false);
         $showHolidays    = (bool) $r->boolean('show_holidays', false);
+        $flag            = $showHolidays ? 1 : 0;
 
-        // Inline numeric flag to avoid named bindings in DB::raw
-        $flag = $showHolidays ? 1 : 0;
-
-        // Aliases:
-        // ad = attendance_days, u = users, hc = holiday_calendars, hd = holiday_dates
-        $q = DB::table('attendance_days as ad')
-            ->join('users as u', 'u.id', '=', 'ad.user_id')
-
-            // Only active users unless overridden
-            ->when(!$includeInactive, fn ($x) => $x->where('u.active', 1))
-
-            // Active holiday calendar for the year of the work_date
+        // Use LEFT JOIN so we can list all users with rows in range
+        $q = DB::table('users as u')
+            ->leftJoin('attendance_days as ad', function ($j) {
+                $j->on('u.id', '=', 'ad.user_id');
+            })
             ->leftJoin('holiday_calendars as hc', function ($j) {
                 $j->on(DB::raw('YEAR(ad.work_date)'), '=', DB::raw('hc.year'))
-                  ->where('hc.status', 'active'); // enum('draft','active')
+                  ->where('hc.status', 'active');
             })
-            // Join only non-working holiday entries for that exact date
             ->leftJoin('holiday_dates as hd', function ($j) {
                 $j->on('hd.holiday_calendar_id', '=', 'hc.id')
                   ->on('hd.date', '=', 'ad.work_date')
                   ->where('hd.is_non_working', 1);
             })
+            ->when(!$includeInactive, fn($x) => $x->where('u.active', 1));
 
-            // Filters
-            ->when($employeeId, fn ($x) => $x->where('u.id', $employeeId))
-            ->when($r->filled('dept'), fn ($x) => $x->where('u.department', $r->dept))
-            ->when($from, fn ($x) => $x->where('ad.work_date', '>=', $from))
-            ->when($to,   fn ($x) => $x->where('ad.work_date', '<=', $to));
+        // Mode handling
+        if ($employeeId) {
+            // Single employee
+            $q->where('u.id', $employeeId);
+        } else {
+            // All active: ensure we only include users who have logs in the date window
+            if ($from || $to) {
+                $q->whereExists(function ($sub) use ($from, $to) {
+                    $sub->select(DB::raw(1))
+                        ->from('attendance_days as ad2')
+                        ->whereColumn('ad2.user_id', 'u.id')
+                        ->when($from, fn($s) => $s->where('ad2.work_date', '>=', $from))
+                        ->when($to,   fn($s) => $s->where('ad2.work_date', '<=', $to));
+                });
+            }
+        }
 
-        // Status filter (if "Holiday" requested and show_holidays enabled)
+        // Filters
+        if ($r->filled('dept')) {
+            $q->where('u.department', $r->dept);
+        }
+        if ($from) {
+            $q->where('ad.work_date', '>=', $from);
+        }
+        if ($to) {
+            $q->where('ad.work_date', '<=', $to);
+        }
+
+        // Status filter (Holiday or normal)
         if ($r->filled('status')) {
             $status = $r->status;
             if ($status === 'Holiday' && $showHolidays) {
-                // Holiday rows = on a non-working holiday AND no scans
                 $q->whereNotNull('hd.id')
                   ->where(function ($noScan) {
                       $this->whereHasAnyScan($noScan, false);
                   });
             } else {
-                // Normal status from attendance_days
                 $q->where('ad.status', $status);
             }
         }
 
-        // Exempt: by default, DON'T show non-working holidays with NO scans
-        // (if show_holidays=1, keep them and label as Holiday)
+        // By default, hide blank non-working holidays
         if (!$showHolidays) {
             $q->where(function ($w) {
-                $w->whereNull('hd.id') // not a (non-working) holiday
+                $w->whereNull('hd.id')
                   ->orWhere(function ($h) {
-                      // it's a holiday, but keep the row if there IS a scan
                       $this->whereHasAnyScan($h, true);
                   });
             });
         }
 
-        // Selects (name, times, numbers, and a friendly status display)
+        // Selects
         $q->select([
             'u.id as user_id',
             DB::raw("TRIM(CONCAT(u.last_name, ', ', u.first_name, ' ', COALESCE(u.middle_name, ''))) as name"),
@@ -143,29 +150,26 @@ class ReportController extends Controller
             'ad.late_minutes',
             'ad.undertime_minutes',
             'ad.total_hours',
-
-            // Show "Holiday" when it's a non-working holiday with no scans AND show_holidays=1.
-            // Important: use the inlined $flag (0/1) — no named parameter here.
             DB::raw("
                 CASE
-                  WHEN ($flag = 1) AND hd.id IS NOT NULL
+                  WHEN ($flag = 1)
+                       AND hd.id IS NOT NULL
                        AND ad.am_in IS NULL AND ad.am_out IS NULL
                        AND ad.pm_in IS NULL AND ad.pm_out IS NULL
                   THEN 'Holiday'
                   ELSE ad.status
-                END as status
+                END AS status
             "),
         ]);
+
+        // In All Active mode, avoid returning users with no rows at all
+        if ($mode !== 'employee') {
+            $q->whereNotNull('ad.work_date');
+        }
 
         return $q;
     }
 
-    /**
-     * Add conditions for "has scan" or "no scan" to a query group.
-     *
-     * @param \Illuminate\Database\Query\Builder $q
-     * @param bool $wantHasScan  true = keep if any scan exists; false = keep only if no scans
-     */
     private function whereHasAnyScan($q, bool $wantHasScan): void
     {
         if ($wantHasScan) {
