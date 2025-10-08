@@ -41,6 +41,21 @@ return [
             'journal_mode' => null,
             'synchronous' => null,
             'transaction_mode' => 'DEFERRED',
+
+           
+
+        ],
+         'biotime' => [
+                'driver' => 'mysql',
+                'host' => env('BIOTIME_DB_HOST', '127.0.0.1'),
+                'port' => env('BIOTIME_DB_PORT', '3306'),
+                'database' => env('BIOTIME_DB_DATABASE', 'zkbiotime'),
+                'username' => env('BIOTIME_DB_USERNAME', 'biotime'),
+                'password' => env('BIOTIME_DB_PASSWORD', ''),
+                'charset' => 'utf8mb4',
+                'collation' => 'utf8mb4_unicode_ci',
+                'prefix' => '',
+                'strict' => false,
         ],
 
         'mysql' => [

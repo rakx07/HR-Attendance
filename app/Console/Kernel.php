@@ -11,6 +11,8 @@ class Kernel extends ConsoleKernel
 
     protected $commands = [
         \App\Console\Commands\AttendanceSyncZkteco::class,
+          \App\Console\Commands\BioTimeImport::class,
+    \App\Console\Commands\BioTimeSyncUsers::class,
     ];
     /**
      * Define the application's command schedule.
