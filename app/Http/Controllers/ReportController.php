@@ -39,20 +39,21 @@ class ReportController extends Controller
 
     // ← ADD: PDF print/preview (uses the same filters via baseQuery)
     public function pdf(Request $r)
-    {
-        $rows = $this->baseQuery($r)
-            ->orderBy('u.department')
-            ->orderBy('u.id')
-            ->orderBy('ad.work_date')
-            ->get();
+{
+    $rows = $this->baseQuery($r)
+        ->orderBy('u.department')
+        ->orderBy('u.id')
+        ->orderBy('ad.work_date')
+        ->get(); // Collection -> we will group in the Blade
 
-        $pdf = Pdf::loadView('reports.attendance_pdf', [
-            'rows'    => $rows,
-            'filters' => $r->all(),
-        ])->setPaper('a4', 'portrait');
+    $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.attendance_pdf', [
+        'rows'    => $rows,
+        'filters' => $r->all(),
+    ])->setPaper('letter', 'portrait'); // ← letter size
 
-        return $pdf->stream('attendance_'.now()->format('Ymd_His').'.pdf');
-    }
+    return $pdf->stream('attendance_'.now()->format('Ymd_His').'.pdf');
+}
+
 
     /**
      * Build the common query for attendance reports.
