@@ -100,6 +100,10 @@ Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(func
     Route::delete('/holidays/{calendar}/dates/{date}', [HolidayController::class,'destroyDate'])->name('holidays.dates.destroy');
 });
 
+Route::middleware(['auth','permission:reports.export'])
+    ->get('/reports/attendance/pdf', [ReportController::class,'pdf'])
+    ->name('reports.attendance.pdf');
 
+    
 // Breeze/Fortify/Jetstream auth routes
 require __DIR__.'/auth.php';

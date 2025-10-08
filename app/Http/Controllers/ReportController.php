@@ -6,23 +6,52 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\AttendanceExport;
+use Barryvdh\DomPDF\Facade\Pdf; // ← ADD: PDF export
 
 class ReportController extends Controller
 {
     public function index(Request $r)
-    {
-        $rows = $this->baseQuery($r)
-            ->orderByDesc('ad.work_date')
-            ->paginate(50)
-            ->withQueryString();
+{
+    // Fetch all active users (employees)
+    $employees = DB::table('users')
+        ->select('id', DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''))) as name"), 'department')
+        ->where('active', 1)
+        ->orderBy('name')
+        ->get();
 
-        return view('reports.attendance', ['rows' => $rows]);
-    }
+    $rows = $this->baseQuery($r)
+        ->orderByDesc('ad.work_date')
+        ->paginate(50)
+        ->withQueryString();
+
+    return view('reports.attendance', [
+        'rows' => $rows,
+        'employees' => $employees, // 👈 pass this to the Blade
+    ]);
+}
+
 
     public function export(Request $r)
     {
         $filename = 'attendance_' . now()->format('Ymd_His') . '.xlsx';
         return Excel::download(new AttendanceExport($r->all()), $filename);
+    }
+
+    // ← ADD: PDF print/preview (uses the same filters via baseQuery)
+    public function pdf(Request $r)
+    {
+        $rows = $this->baseQuery($r)
+            ->orderBy('u.department')
+            ->orderBy('u.id')
+            ->orderBy('ad.work_date')
+            ->get();
+
+        $pdf = Pdf::loadView('reports.attendance_pdf', [
+            'rows'    => $rows,
+            'filters' => $r->all(),
+        ])->setPaper('a4', 'portrait');
+
+        return $pdf->stream('attendance_'.now()->format('Ymd_His').'.pdf');
     }
 
     /**

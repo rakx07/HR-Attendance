@@ -1,38 +1,73 @@
 <?php
 
-// app/Exports/AttendanceExport.php
 namespace App\Exports;
 
+use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Support\Facades\DB;
-use Maatwebsite\Excel\Concerns\FromQuery;
+use Illuminate\Http\Request;
+use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithHeadings;
 
-class AttendanceExport implements FromQuery, WithHeadings
+class AttendanceExport implements FromArray, WithHeadings, Responsable
 {
-    public function __construct(protected array $filters = []) {}
+    public string $fileName = 'attendance.xlsx';
+    protected array $filters;
 
-    public function query()
+    public function __construct(array $filters)
     {
-        $r = (object)$this->filters;
-
-        return DB::table('attendance_days')
-            ->join('users','users.id','=','attendance_days.user_id')
-            ->when(!empty($r->employee_id), fn($x)=>$x->where('users.id',$r->employee_id))
-            ->when(!empty($r->status), fn($x)=>$x->where('status',$r->status))
-            ->when(!empty($r->dept), fn($x)=>$x->where('users.department',$r->dept))
-            ->when(!empty($r->from), fn($x)=>$x->where('work_date','>=',$r->from))
-            ->when(!empty($r->to), fn($x)=>$x->where('work_date','<=',$r->to))
-            ->select(
-                'users.name','users.department','work_date',
-                'am_in','am_out','pm_in','pm_out',
-                'late_minutes','undertime_minutes','total_hours','status'
-            )
-            ->orderByDesc('work_date');
+        $this->filters = $filters;
     }
 
     public function headings(): array
     {
-        return ['Name','Department','Date','AM In','AM Out','PM In','PM Out','Late (min)','Undertime (min)','Hours','Status'];
+        return [
+            'Date', 'Name', 'Department',
+            'AM In', 'AM Out', 'PM In', 'PM Out',
+            'Late (min)', 'Undertime (min)', 'Hours', 'Status',
+        ];
+    }
+
+    public function array(): array
+    {
+        // Build the same query as in ReportController::baseQuery (copied inline for simplicity)
+        $r = new Request($this->filters);
+
+        $q = DB::table('attendance_days as ad')
+            ->join('users as u', 'u.id', '=', 'ad.user_id')
+            ->select('ad.work_date','u.name','u.department','ad.am_in','ad.am_out','ad.pm_in','ad.pm_out',
+                'ad.late_minutes','ad.undertime_minutes','ad.total_hours','ad.status');
+
+        if ($r->filled('from')) $q->whereDate('ad.work_date', '>=', $r->date('from'));
+        if ($r->filled('to'))   $q->whereDate('ad.work_date', '<=', $r->date('to'));
+
+        $mode = $r->input('mode', 'all_active');
+        if ($mode === 'employee') {
+            if ($r->filled('employee_id')) $q->where('u.id', $r->integer('employee_id'));
+        } else {
+            if (!$r->boolean('include_inactive')) $q->where('u.active', 1);
+        }
+
+        if ($r->filled('dept'))   $q->where('u.department', 'like', '%'.$r->input('dept').'%');
+        if ($r->filled('status')) $q->where('ad.status', $r->input('status'));
+
+        $rows = $q->orderBy('u.name')->orderBy('ad.work_date')->get();
+
+        // Format times as 12-hour for Excel output
+        return $rows->map(function ($r) {
+            $f = fn($t) => $t ? \Carbon\Carbon::parse($t)->format('g:i A') : '';
+            return [
+                $r->work_date,
+                $r->name,
+                $r->department,
+                $f($r->am_in),
+                $f($r->am_out),
+                $f($r->pm_in),
+                $f($r->pm_out),
+                $r->late_minutes,
+                $r->undertime_minutes,
+                number_format((float)$r->total_hours, 2),
+                $r->status,
+            ];
+        })->toArray();
     }
 }
-
