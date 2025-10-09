@@ -7,29 +7,71 @@
 
     <title>{{ config('app.name', 'Laravel') }}</title>
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.bunny.net">
-    <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+    <!-- ==============================
+         Local Fonts (Figtree)
+         ============================== -->
+    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}" crossorigin>
+    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}" crossorigin>
+    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}" crossorigin>
 
-    <!-- Scripts -->
+    <style>
+        /* =========================
+           Local Figtree Font Faces
+           ========================= */
+        @font-face {
+            font-family: "Figtree";
+            src: url("{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}") format("woff2");
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: "Figtree";
+            src: url("{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}") format("woff2");
+            font-weight: 500;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: "Figtree";
+            src: url("{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}") format("woff2");
+            font-weight: 600;
+            font-style: normal;
+            font-display: swap;
+        }
+
+        html {
+            font-family: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+        }
+    </style>
+
+    <!-- =========================
+         Scripts & Styles (Vite)
+         ========================= -->
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 
+    <!-- =========================
+         Theme Initialization
+         ========================= -->
     <script>
         // Init theme on first paint
         (function() {
-          const saved = localStorage.getItem('theme');
-          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          const theme = saved ?? (prefersDark ? 'dark' : 'light');
-          if (theme === 'dark') document.documentElement.classList.add('dark');
+            const saved = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = saved ?? (prefersDark ? 'dark' : 'light');
+            if (theme === 'dark') document.documentElement.classList.add('dark');
         })();
+
+        // Toggle between dark/light
         function toggleTheme() {
-          const root = document.documentElement;
-          const nowDark = !root.classList.contains('dark');
-          root.classList.toggle('dark', nowDark);
-          localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+            const root = document.documentElement;
+            const nowDark = !root.classList.contains('dark');
+            root.classList.toggle('dark', nowDark);
+            localStorage.setItem('theme', nowDark ? 'dark' : 'light');
         }
     </script>
 </head>
+
 <body class="font-sans antialiased bg-gray-100 dark:bg-gray-900">
     <div class="min-h-screen flex flex-col">
         {{-- Top navigation (Breeze default) --}}

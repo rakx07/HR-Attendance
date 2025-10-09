@@ -7,8 +7,30 @@
         <title>{{ config('app.name', 'Laravel') }}</title>
 
         <!-- Fonts -->
-        <link rel="preconnect" href="https://fonts.bunny.net">
-        <link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600" rel="stylesheet" />
+       {{-- Preload local fonts so they don’t block rendering --}}
+<link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}" crossorigin>
+
+<style>
+@font-face{
+  font-family:"Figtree";
+  src:url("{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}") format("woff2");
+  font-weight:400; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:"Figtree";
+  src:url("{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}") format("woff2");
+  font-weight:500; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:"Figtree";
+  src:url("{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}") format("woff2");
+  font-weight:600; font-style:normal; font-display:swap;
+}
+html { font-family:"Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+</style>
+
 
         <!-- Styles / Scripts -->
         @if (file_exists(public_path('build/manifest.json')) || file_exists(public_path('hot')))
