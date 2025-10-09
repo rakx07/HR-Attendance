@@ -4,15 +4,13 @@
     <meta charset="utf-8">
     <title>Attendance Report</title>
     <style>
-        /* Compact, formal, one-page-per-employee layout */
-        @page { margin: 16mm 12mm; } /* top/btm, left/right */
+        @page { margin: 16mm 12mm; }
         body { font-family: DejaVu Sans, sans-serif; color: #111; font-size: 10.5px; }
         .header { text-align: center; margin-bottom: 6px; }
         .org { font-weight: 700; font-size: 12px; letter-spacing: .2px; }
         .doc-title { font-size: 14px; font-weight: 700; margin-top: 2px; }
         .line { border-top: 1px solid #000; margin: 6px 0 8px; }
 
-        .meta { margin: 4px 0 6px; }
         .meta-table { width: 100%; border-collapse: collapse; }
         .meta-table td { padding: 2px 0; vertical-align: top; }
         .right { text-align: right; }
@@ -23,30 +21,34 @@
         th { font-weight: 700; text-align: center; }
         td { vertical-align: top; }
 
-        /* Slight zebra for readability without adding height */
         tbody tr:nth-child(odd) td { background: #fafafa; }
 
         .totals { margin-top: 6px; font-weight: 700; }
         .small { font-size: 10px; color: #555; }
+        .mil { display: block; color: #666; font-size: 9px; line-height: 1.05; }
+
         .page-break { page-break-after: always; }
-
-        /* Prevent rows from breaking awkwardly */
         tr { page-break-inside: avoid; }
-
-        /* Tighten header row height */
         thead th { line-height: 1.1; }
 
-        /* Keep columns narrow for a single page */
         .w-date { width: 13%; }
-        .w-time { width: 11%; }   /* AM/PM in/out cells */
-        .w-min  { width: 9.5%; }  /* Late / Undertime */
-        .w-hrs  { width: 8%; }    /* Hours */
-        .w-stat { width: 13%; }   /* Status */
+        .w-time { width: 11%; }
+        .w-min  { width: 9.5%; }
+        .w-hrs  { width: 8%; }
+        .w-stat { width: 13%; }
     </style>
 </head>
 <body>
 @php
-    $grouped = $rows->groupBy('user_id'); // one page per employee
+    // Helper to render a timestamp with 12h + 24h (with seconds) or an en dash.
+    $timeCell = function (?string $ts) {
+        if (!$ts) return '—';
+        $t = \Carbon\Carbon::parse($ts);
+        // 12h (no seconds), then 24h with seconds on a tiny line below
+        return $t->format('g:i A') . '<span class="mil">' . $t->format('H:i:s') . '</span>';
+    };
+
+    $grouped = $rows->groupBy('user_id');
     $idx = 0; $count = $grouped->count();
 @endphp
 
@@ -59,14 +61,12 @@
         $lateRemainder = $lateTotalMin % 60;
     @endphp
 
-    {{-- Header --}}
     <div class="header">
         <div class="org">Attendance Management System</div>
         <div class="doc-title">Attendance Report</div>
     </div>
     <div class="line"></div>
 
-    {{-- Meta block (kept concise to fit one page) --}}
     <table class="meta-table">
         <tr>
             <td><strong>Employee:</strong> {{ $emp->name }} <span class="small">(#{{ $userId }})</span></td>
@@ -78,7 +78,6 @@
         </tr>
     </table>
 
-    {{-- Table (Name and Department columns removed) --}}
     <table style="margin-top: 6px;">
         <thead>
             <tr>
@@ -97,20 +96,21 @@
         @foreach($empRows as $r)
             <tr>
                 <td class="center">{{ $r->work_date }}</td>
-                <td class="center">{{ $r->am_in  ? \Carbon\Carbon::parse($r->am_in)->format('g:i A')  : '' }}</td>
-                <td class="center">{{ $r->am_out ? \Carbon\Carbon::parse($r->am_out)->format('g:i A') : '' }}</td>
-                <td class="center">{{ $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)->format('g:i A')  : '' }}</td>
-                <td class="center">{{ $r->pm_out ? \Carbon\Carbon::parse($r->pm_out)->format('g:i A') : '' }}</td>
-                <td class="right">{{ $r->late_minutes }}</td>
-                <td class="right">{{ $r->undertime_minutes }}</td>
-                <td class="right">{{ number_format((float)$r->total_hours, 2) }}</td>
-                <td class="center">{{ $r->status }}</td>
+
+                <td class="center">{!! $timeCell($r->am_in)  !!}</td>
+                <td class="center">{!! $timeCell($r->am_out) !!}</td>
+                <td class="center">{!! $timeCell($r->pm_in)  !!}</td>
+                <td class="center">{!! $timeCell($r->pm_out) !!}</td>
+
+                <td class="right">{{ $r->late_minutes ?? 0 }}</td>
+                <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
+                <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>
+                <td class="center">{{ $r->status ?? '—' }}</td>
             </tr>
         @endforeach
         </tbody>
     </table>
 
-    {{-- Per-employee totals (compact) --}}
     <div class="totals">
         Total Late: {{ $lateHours }} hr {{ $lateRemainder }} min ({{ $lateTotalMin }} min)
     </div>
@@ -121,11 +121,9 @@
     @endif
 @endforeach
 
-{{-- Optional page numbers (kept small, bottom-right) --}}
 <script type="text/php">
 if (isset($pdf)) {
     $font = $fontMetrics->get_font("DejaVu Sans", "normal");
-    // x,y tuned for letter with margins above
     $pdf->page_text(520, 770, "Page {PAGE_NUM} of {PAGE_COUNT}", $font, 9, [0,0,0]);
 }
 </script>
