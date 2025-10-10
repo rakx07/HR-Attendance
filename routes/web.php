@@ -17,9 +17,7 @@ use App\Http\Controllers\HolidayController;
 */
 
 // Welcome page
-Route::get('/', function () {
-    return view('welcome');
-});
+Route::match(['GET','HEAD'], '/', fn () => view('welcome'));
 
 // Dashboard
 Route::get('/dashboard', function () {
