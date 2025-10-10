@@ -25,7 +25,6 @@
 
         .totals { margin-top: 6px; font-weight: 700; }
         .small { font-size: 10px; color: #555; }
-        .mil { display: block; color: #666; font-size: 9px; line-height: 1.05; }
 
         .page-break { page-break-after: always; }
         tr { page-break-inside: avoid; }
@@ -40,12 +39,10 @@
 </head>
 <body>
 @php
-    // Helper to render a timestamp with 12h + 24h (with seconds) or an en dash.
+    // Helper: 12-hour format only
     $timeCell = function (?string $ts) {
         if (!$ts) return '—';
-        $t = \Carbon\Carbon::parse($ts);
-        // 12h (no seconds), then 24h with seconds on a tiny line below
-        return $t->format('g:i A') . '<span class="mil">' . $t->format('H:i:s') . '</span>';
+        return \Carbon\Carbon::parse($ts)->format('g:i A');
     };
 
     $grouped = $rows->groupBy('user_id');
@@ -96,12 +93,10 @@
         @foreach($empRows as $r)
             <tr>
                 <td class="center">{{ $r->work_date }}</td>
-
                 <td class="center">{!! $timeCell($r->am_in)  !!}</td>
                 <td class="center">{!! $timeCell($r->am_out) !!}</td>
                 <td class="center">{!! $timeCell($r->pm_in)  !!}</td>
                 <td class="center">{!! $timeCell($r->pm_out) !!}</td>
-
                 <td class="right">{{ $r->late_minutes ?? 0 }}</td>
                 <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
                 <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>

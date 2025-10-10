@@ -98,13 +98,25 @@ class AttendanceConsolidate extends Command
                 $amIn = $amOut = $pmIn = $pmOut = null;
 
                 if ($mode === 'sequence') {
-                    // First 4 punches of the day (no windows)
-                    $seq  = $punches->take(4)->values();
-                    $amIn = $seq->get(0);
-                    $amOut= $seq->get(1);
-                    $pmIn = $seq->get(2);
-                    $pmOut= $this->pickLastOfDay($punches, $workDate, $tz, $seq->get(2) ?? $seq->get(1) ?? $seq->get(0));
-                } else {
+                        // Custom rule: if first punch >= 11:45 AM → PM In; last punch → PM Out
+                        $threshold = Carbon::parse("$workDate 11:45:00", $tz);
+
+                        $first = $punches->first();
+                        if ($first && $first->gte($threshold)) {
+                            // After 11:45 AM ⇒ PM in/out only
+                            $amIn = $amOut = null;
+                            $pmIn = $first;
+                            $pmOut = $this->pickLastOfDay($punches, $workDate, $tz, $pmIn);
+                        } else {
+                            // Normal sequence fallback
+                            $seq  = $punches->take(4)->values();
+                            $amIn = $seq->get(0);
+                            $amOut= $seq->get(1);
+                            $pmIn = $seq->get(2);
+                            $pmOut= $this->pickLastOfDay($punches, $workDate, $tz, $seq->get(2) ?? $seq->get(1) ?? $seq->get(0));
+                        }
+                    } else {
+
                     // WINDOWS MODE with your rules:
 
                     // 1) AM IN: first punch BEFORE the PM-In threshold
