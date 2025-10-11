@@ -1,65 +1,77 @@
+{{-- resources/views/layouts/guest.blade.php --}}
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>{{ config('app.name', 'HR Attendance Monitoring System') }}</title>
 
-    <title>{{ config('app.name', 'Laravel') }}</title>
-
-    <!-- ==============================
-         Local Fonts (Figtree)
-         ============================== -->
-    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}" crossorigin>
-    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}" crossorigin>
-    <link rel="preload" as="font" type="font/woff2" href="{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}" crossorigin>
+    {{-- Vite assets --}}
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
 
     <style>
-        /* =========================
-           Local Figtree Font Faces
-           ========================= */
-        @font-face {
-            font-family: "Figtree";
-            src: url("{{ asset('fonts/figtree/figtree-v9-latin-400.woff2') }}") format("woff2");
-            font-weight: 400;
-            font-style: normal;
-            font-display: swap;
-        }
-        @font-face {
-            font-family: "Figtree";
-            src: url("{{ asset('fonts/figtree/figtree-v9-latin-500.woff2') }}") format("woff2");
-            font-weight: 500;
-            font-style: normal;
-            font-display: swap;
-        }
-        @font-face {
-            font-family: "Figtree";
-            src: url("{{ asset('fonts/figtree/figtree-v9-latin-600.woff2') }}") format("woff2");
-            font-weight: 600;
-            font-style: normal;
-            font-display: swap;
+        :root {
+            --green1: #0b5d22;   /* deep green */
+            --green2: #1b7a2e;   /* mid green */
+            --gold:   #e4b200;   /* gold */
         }
 
-        html {
-            font-family: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Figtree', sans-serif;
+            background: linear-gradient(135deg, var(--green1) 0%, var(--green2) 50%, var(--gold) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #222;
+        }
+
+        .auth-wrapper {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(255,255,255,0.94);
+            border-radius: 18px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.18);
+            padding: 2rem 2.5rem;
+            text-align: center;
+            backdrop-filter: blur(8px);
+        }
+
+        .school-logo {
+            width: 80px;
+            margin: 0 auto 0.75rem;
+            display: block;
+        }
+
+        .app-title {
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: #0b5d22;
+            margin-bottom: 0.5rem;
+        }
+
+        .sub-title {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #166534;
+            margin-bottom: 1.5rem;
         }
     </style>
-
-    <!-- =========================
-         Scripts & Styles (Vite)
-         ========================= -->
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 
-<body class="font-sans text-gray-900 antialiased">
-    <div class="min-h-screen flex flex-col sm:justify-center items-center pt-6 sm:pt-0 bg-gray-100">
-        <div>
-            <a href="/">
-                <x-application-logo class="w-20 h-20 fill-current text-gray-500" />
-            </a>
-        </div>
+<body>
+    <div class="auth-wrapper">
+        {{-- Replace with your school logo --}}
+        <img src="{{ asset('images/school-logo.png') }}" alt="School Logo" class="school-logo">
 
-        <div class="w-full sm:max-w-md mt-6 px-6 py-4 bg-white shadow-md overflow-hidden sm:rounded-lg">
+        {{-- System title --}}
+        <div class="app-title">HR Attendance Monitoring System</div>
+        <div class="sub-title">Sign In</div>
+
+        {{-- Auth content from the slot --}}
+        <div>
             {{ $slot }}
         </div>
     </div>
