@@ -47,14 +47,15 @@
             </x-primary-button>
         </div>
 
-        {{-- Forgot --}}
-        @if (Route::has('password.request'))
-            <div class="text-center mt-3">
-                <a class="text-sm text-green-700 hover:underline"
-                   href="{{ route('password.request') }}">
-                    {{ __('Forgot your password?') }}
-                </a>
-            </div>
-        @endif
+        {{-- Contact MIS Office instead of forgot password --}}
+        <div class="text-center mt-4 text-sm text-gray-700">
+            <p>
+                Having trouble logging in? <br>
+                Please contact the <strong>MIS Office Staff</strong> for password assistance.
+            </p>
+            <p class="mt-1 text-green-700 font-medium">
+                📧 mis@ndmu.edu.ph &nbsp;|&nbsp; ☎️ 150
+            </p>
+        </div>
     </form>
 </x-guest-layout>
