@@ -59,30 +59,53 @@
 </head>
 <body>
 @php
+    use Carbon\Carbon;
+    use Carbon\CarbonPeriod;
+
     // Helper: 12-hour format with seconds
     $timeCell = function (?string $ts) {
         if (!$ts) return '—';
         return \Carbon\Carbon::parse($ts)->format('g:i:s A');
     };
 
+    // Determine the calendar range to render (inclusive)
+    $fromStr = $filters['from'] ?? null;
+    $toStr   = $filters['to']   ?? null;
+
+    if (!$fromStr || !$toStr) {
+        // fallback to month of first row (or current month)
+        $firstDate = optional($rows->first())->work_date;
+        $baseDay   = $firstDate ? Carbon::parse($firstDate) : Carbon::now();
+        $fromStr   = $fromStr ?: $baseDay->copy()->startOfMonth()->toDateString();
+        $toStr     = $toStr   ?: $baseDay->copy()->endOfMonth()->toDateString();
+    }
+
+    $from = Carbon::parse($fromStr)->startOfDay();
+    $to   = Carbon::parse($toStr)->startOfDay();
+    $period = CarbonPeriod::create($from, $to); // includes endpoints
+
     $grouped = $rows->groupBy('user_id');
     $idx = 0;
     $count = $grouped->count();
+
+    // For fast lookup, status strings we want to surface as-is if present
+    $leaveLike = ['Holiday', 'Vacation Leave', 'Sick Leave'];
 @endphp
 
 @foreach($grouped as $userId => $empRows)
     @php
         $emp = $empRows->first();
-        $range = trim(($filters['from'] ?? '—') . ' to ' . ($filters['to'] ?? '—'));
+
+        // Pre-index this employee's rows by Y-m-d for O(1) lookup
+        $byDate = $empRows->keyBy(function($r){
+            return \Carbon\Carbon::parse($r->work_date)->toDateString();
+        });
+
+        $rangeText = $from->toDateString() . ' to ' . $to->toDateString();
+
         $lateTotalMin = (int) $empRows->sum('late_minutes');
         $lateHours = intdiv($lateTotalMin, 60);
         $lateRemainder = $lateTotalMin % 60;
-
-        // Sort strictly by day number (1 → 31) inside the selected range
-        $empRowsSorted = $empRows->sortBy(function($r) {
-            try { return \Carbon\Carbon::parse($r->work_date)->day; }
-            catch (\Throwable $e) { return 0; }
-        });
     @endphp
 
     <div class="header">
@@ -98,7 +121,7 @@
         </tr>
         <tr>
             <td><strong>Department:</strong> {{ $emp->department ?? '—' }}</td>
-            <td class="right"><strong>Range:</strong> {{ $range }}</td>
+            <td class="right"><strong>Range:</strong> {{ $rangeText }}</td>
         </tr>
     </table>
 
@@ -117,17 +140,30 @@
             </tr>
         </thead>
         <tbody>
-        @foreach($empRowsSorted as $r)
+        @foreach($period as $day)
+            @php
+                $dkey = $day->toDateString();
+                $r = $byDate->get($dkey);
+
+                if ($r) {
+                    // If there is a row, prefer its status (Holiday/VL/SL/Present/etc.)
+                    $status = $r->status ?? '—';
+                } else {
+                    // No record that day: Sunday => No Duty, else Absent
+                    $status = $day->isSunday() ? 'No Duty' : 'Absent';
+                }
+            @endphp
+
             <tr>
-                <td class="center">{{ $r->work_date }}</td>
-                <td class="center time">{{ $timeCell($r->am_in) }}</td>
-                <td class="center time">{{ $timeCell($r->am_out) }}</td>
-                <td class="center time">{{ $timeCell($r->pm_in) }}</td>
-                <td class="center time">{{ $timeCell($r->pm_out) }}</td>
-                <td class="right">{{ $r->late_minutes ?? 0 }}</td>
+                <td class="center">{{ $dkey }}</td>
+                <td class="center time">{{ $r ? $timeCell($r->am_in)  : '—' }}</td>
+                <td class="center time">{{ $r ? $timeCell($r->am_out) : '—' }}</td>
+                <td class="center time">{{ $r ? $timeCell($r->pm_in)  : '—' }}</td>
+                <td class="center time">{{ $r ? $timeCell($r->pm_out) : '—' }}</td>
+                <td class="right">{{ $r->late_minutes      ?? 0 }}</td>
                 <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
                 <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>
-                <td class="center">{{ $r->status ?? '—' }}</td>
+                <td class="center">{{ $status }}</td>
             </tr>
         @endforeach
         </tbody>
