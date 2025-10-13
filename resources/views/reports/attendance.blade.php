@@ -97,6 +97,53 @@
       };
     @endphp
 
+    {{-- ========== PAGE-SCOPED LOOKUPS (holidays + working-day flags) ========== --}}
+    @php
+      // Work on either paginator items or direct collection
+      $pageItems = method_exists($rows, 'items') ? collect($rows->items()) : collect($rows);
+
+      // Determine date window on THIS page
+      $dates = $pageItems->pluck('work_date')->filter()->map(fn($d) => \Carbon\Carbon::parse($d)->toDateString());
+      $minDate = $dates->min();
+      $maxDate = $dates->max();
+
+      // Holidays for this page: map Y-m-d => (object)
+      $holidayByDate = collect();
+      if ($minDate && $maxDate) {
+          $holidayByDate = \Illuminate\Support\Facades\DB::table('holiday_calendars as hc')
+              ->join('holiday_dates as hd', 'hd.holiday_calendar_id', '=', 'hc.id')
+              ->where('hc.status', 'active')
+              ->whereBetween('hd.date', [$minDate, $maxDate])
+              ->get(['hd.date','hd.name','hd.is_non_working'])
+              ->keyBy(fn($h) => \Carbon\Carbon::parse($h->date)->toDateString());
+      }
+
+      // Build working-day map from shift_window_days:  $map[shift_window_id][dow] = 0/1
+      $shiftIds = $pageItems->pluck('shift_window_id')->filter()->unique()->values();
+      $shiftDayMap = []; // plain PHP array to avoid "indirect modification" issues
+      if ($shiftIds->isNotEmpty()) {
+          $rowsDays = \Illuminate\Support\Facades\DB::table('shift_window_days')
+              ->whereIn('shift_window_id', $shiftIds)
+              ->get(['shift_window_id','dow','is_working']);
+          foreach ($rowsDays as $r) {
+              $sid = (int)$r->shift_window_id;
+              $dow = (int)$r->dow;           // 0=Sun..6=Sat
+              $isW = (int)$r->is_working;    // 0/1
+              if (!isset($shiftDayMap[$sid])) $shiftDayMap[$sid] = [];
+              $shiftDayMap[$sid][$dow] = $isW;
+          }
+      }
+
+      // Helper: is working day for this shift? default = Sunday off when unknown
+      $isWorkingDay = function (?int $shiftId, \Carbon\Carbon $day) use ($shiftDayMap): bool {
+          $dow = $day->dayOfWeek; // 0..6 (Sun..Sat)
+          if ($shiftId && isset($shiftDayMap[$shiftId]) && array_key_exists($dow, $shiftDayMap[$shiftId])) {
+              return (int)$shiftDayMap[$shiftId][$dow] === 1;
+          }
+          return $dow !== \Carbon\Carbon::SUNDAY;
+      };
+    @endphp
+
     {{-- TABLE --}}
     <div class="bg-white rounded shadow overflow-x-auto">
       <style>
@@ -106,7 +153,6 @@
       </style>
 
       @php
-        // page subtotals
         $sumLate = 0; $sumUnder = 0; $sumHours = 0.0;
       @endphp
 
@@ -139,19 +185,36 @@
         <tbody>
         @forelse($rows as $r)
           @php
-            // helpers
             $fmt = fn($ts) => $ts ? \Carbon\Carbon::parse($ts)->format('g:i:s A') : '';
 
-            $hAmOut   = $r->am_out ? \Carbon\Carbon::parse($r->am_out) : null;
-            $hPmIn    = $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)  : null;
-            $hPmOut   = $r->pm_out ? \Carbon\Carbon::parse($r->pm_out) : null;
+            $hAmOut = $r->am_out ? \Carbon\Carbon::parse($r->am_out) : null;
+            $hPmIn  = $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)  : null;
+            $hPmOut = $r->pm_out ? \Carbon\Carbon::parse($r->pm_out) : null;
 
-            $d        = \Carbon\Carbon::parse($r->work_date);
-            $t1130    = $d->copy()->setTime(11,30,0);
-            $t1259    = $d->copy()->setTime(12,59,59);
-            $t1300    = $d->copy()->setTime(13,0,0);
-            $t1700    = $d->copy()->setTime(17,0,0);
+            $d      = \Carbon\Carbon::parse($r->work_date);
+            $t1130  = $d->copy()->setTime(11,30,0);
+            $t1259  = $d->copy()->setTime(12,59,59);
+            $t1300  = $d->copy()->setTime(13,0,0);
+            $t1700  = $d->copy()->setTime(17,0,0);
 
+            // Page-level holiday + working-day overrides
+            $hol = $holidayByDate->get($d->toDateString());
+            $isHolidayNonWorking = $hol && (int)$hol->is_non_working === 1;
+            $workingToday = $isWorkingDay((int)($r->shift_window_id ?? null), $d);
+            $hasScans = (bool)($r->am_in || $r->am_out || $r->pm_in || $r->pm_out);
+
+            // Final status to show
+            if (!empty($r->status)) {
+                $statusShow = $r->status;
+            } elseif ($isHolidayNonWorking && !$hasScans) {
+                $statusShow = 'Holiday' . (!empty($hol->name) ? ': '.$hol->name : '');
+            } elseif (!$workingToday && !$hasScans) {
+                $statusShow = 'No Duty';
+            } else {
+                $statusShow = 'Absent';
+            }
+
+            // Remarks (sequence logic hinting)
             $remarks = [];
             if (!$hPmIn && !$hPmOut && $hAmOut && $hAmOut->betweenIncluded($t1130, $t1259)) {
               $remarks[] = 'Morning only';
@@ -163,8 +226,8 @@
               $remarks[] = 'Undertime PM Out (< 5:00 PM)';
             }
 
-            // accumulate page totals
-            $sumLate += (int)($r->late_minutes ?? 0);
+            // Totals
+            $sumLate  += (int)($r->late_minutes ?? 0);
             $sumUnder += (int)($r->undertime_minutes ?? 0);
             $sumHours += (float)($r->total_hours ?? 0);
           @endphp
@@ -185,11 +248,12 @@
 
             <td class="px-3 py-2">
               @php
-                $st = (string)($r->status ?? '—');
+                $st = (string)$statusShow;
                 $bg = 'bg-gray-200 text-gray-800';
                 if(str_contains($st,'Late') && str_contains($st,'Under')) $bg='bg-amber-200 text-amber-900';
                 elseif($st==='Present') $bg='bg-emerald-200 text-emerald-900';
-                elseif($st==='Holiday') $bg='bg-sky-200 text-sky-900';
+                elseif(str_starts_with($st,'Holiday')) $bg='bg-sky-200 text-sky-900';
+                elseif($st==='No Duty') $bg='bg-slate-200 text-slate-800';
                 elseif($st==='Absent')  $bg='bg-rose-200 text-rose-900';
                 elseif(str_contains($st,'Late')) $bg='bg-yellow-200 text-yellow-900';
                 elseif(str_contains($st,'Under')) $bg='bg-orange-200 text-orange-900';
@@ -215,7 +279,7 @@
         </tbody>
 
         {{-- PAGE SUBTOTALS --}}
-        @if($rows->count())
+        @if((method_exists($rows,'count') ? $rows->count() : count($rows)))
           <tfoot class="bg-gray-50">
             <tr class="font-semibold border-t">
               <td colspan="7" class="px-3 py-2 text-right">Page totals:</td>
@@ -229,7 +293,7 @@
       </table>
     </div>
 
-    <div class="mt-3">{{ $rows->withQueryString()->links() }}</div>
+    <div class="mt-3">{{ method_exists($rows,'withQueryString') ? $rows->withQueryString()->links() : '' }}</div>
 
     <p class="text-xs text-gray-500 mt-2">
       Display assumes <em>sequence</em> consolidation logic (AM-out only from 11:30–12:59, PM-in ≥ 11:45 preferred, late if ≥ 1:00 PM, PM-out last scan; undertime if PM-out &lt; 5:00 PM).

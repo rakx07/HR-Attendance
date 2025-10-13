@@ -12,6 +12,7 @@ class ReportController extends Controller
 {
     public function index(Request $r)
     {
+        // Employees dropdown (active by default)
         $employees = DB::table('users')
             ->select(
                 'id',
@@ -22,11 +23,13 @@ class ReportController extends Controller
             ->orderBy('name')
             ->get();
 
+        // Sort controls
         $sort = $r->input('sort', 'date');                 // 'date' | 'name'
         $defaultDir = $sort === 'name' ? 'asc' : 'desc';
         $dir  = strtolower($r->input('dir', $defaultDir)); // 'asc' | 'desc'
         $dir  = in_array($dir, ['asc','desc']) ? $dir : $defaultDir;
 
+        // Build query
         $q = $this->baseQuery($r);
         $q = $this->applySort($q, $sort, $dir);
 
@@ -46,24 +49,23 @@ class ReportController extends Controller
 
     public function pdf(Request $r)
     {
-        // --- Lift limits for heavy renders (THIS REQUEST ONLY) ---
-        @ini_set('max_execution_time', '0'); // 0 = unlimited for this request
-        @ini_set('memory_limit', '1024M');   // raise if needed
+        // Lift limits for heavy renders (THIS REQUEST ONLY)
+        @ini_set('max_execution_time', '0'); // 0 = unlimited
+        @ini_set('memory_limit', '1024M');
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);              // also remove SAPI time limit
+            @set_time_limit(0);
         }
-        DB::connection()->disableQueryLog(); // don’t store all queries in RAM
+        DB::connection()->disableQueryLog();
 
-        // Optional sort
+        // Sort
         $sort = $r->input('sort', 'date');
         $defaultDir = $sort === 'name' ? 'asc' : 'desc';
         $dir  = strtolower($r->input('dir', $defaultDir));
         $dir  = in_array($dir, ['asc','desc']) ? $dir : $defaultDir;
 
-        // Build query (use your stricter PDF variant if you prefer)
+        // Query
         $q = $this->baseQuery($r);
         $q = $this->applySort($q, $sort, $dir);
-
         $rows = $q->get();
 
         $pdf = Pdf::loadView('reports.attendance_pdf', [
@@ -74,12 +76,18 @@ class ReportController extends Controller
             'maxRows'   => null,
         ])->setPaper('letter', 'portrait');
 
-        // keep output light
-        $pdf->setOption('dpi', 72);
+        if (method_exists($pdf, 'setOption')) {
+            $pdf->setOption('dpi', 72);
+        }
 
         return $pdf->stream('attendance_' . now()->format('Ymd_His') . '.pdf');
     }
 
+    /**
+     * Core query for listing/printing.
+     * Includes u.shift_window_id (needed by Blade for No-Duty logic)
+     * and derives "Holiday" when show_holidays=true and no scans exist.
+     */
     protected function baseQuery(Request $r)
     {
         $mode            = $r->input('mode', 'all_active');
@@ -107,6 +115,7 @@ class ReportController extends Controller
             })
             ->when(!$includeInactive, fn($x) => $x->where('u.active', 1));
 
+        // Scope by employee or by users who have logs in range
         if ($employeeId) {
             $q->where('u.id', $employeeId);
         } else {
@@ -121,10 +130,12 @@ class ReportController extends Controller
             }
         }
 
-        if ($r->filled('dept'))        $q->where('u.department', $r->dept);
-        if ($from)                     $q->where('ad.work_date', '>=', $from);
-        if ($to)                       $q->where('ad.work_date', '<=', $to);
+        // Additional filters
+        if ($r->filled('dept')) $q->where('u.department', $r->dept);
+        if ($from)              $q->where('ad.work_date', '>=', $from);
+        if ($to)                $q->where('ad.work_date', '<=', $to);
 
+        // Status filter
         if ($r->filled('status')) {
             $status = $r->status;
             if ($status === 'Holiday' && $showHolidays) {
@@ -137,6 +148,7 @@ class ReportController extends Controller
             }
         }
 
+        // By default, hide blank non-working holidays unless explicitly requested
         if (!$showHolidays) {
             $q->where(function ($w) {
                 $w->whereNull('hd.id')
@@ -146,8 +158,10 @@ class ReportController extends Controller
             });
         }
 
+        // SELECTS (include shift_window_id)
         $q->select([
             'u.id as user_id',
+            'u.shift_window_id',
             DB::raw("TRIM(CONCAT(u.last_name, ', ', u.first_name, ' ', COALESCE(u.middle_name, ''))) as name"),
             'u.department',
             'ad.work_date',
