@@ -13,13 +13,9 @@
         /* --- Compact typography/layout to keep ONE PAGE per employee --- */
         body { font-family: DejaVu Sans, sans-serif; color:#111; font-size:9px; line-height:1.15; }
 
-        .employee {
-            /* Very important for DomPDF pagination */
-            page-break-before: always;
-            page-break-after: always;
-            page-break-inside: avoid;
-        }
-        .employee.first { page-break-before: avoid; } /* first employee stays on page 1 */
+        /* One page per employee without trailing blank pages */
+        .employee { page-break-inside: avoid; }
+        .employee + .employee { page-break-before: always; } /* break ONLY before the next employee */
 
         .header { text-align:center; margin-bottom:4px; }
         .org { font-weight:700; font-size:10px; letter-spacing:.15px; }
@@ -59,7 +55,7 @@
         .sig-table { width:100%; border-collapse:collapse; margin-top:8px; }
         .sig-table td { border:0; vertical-align:bottom; }
         .sig-cell { width:50%; }
-        .sig-pad { height:14px; } /* slightly smaller pad to save space */
+        .sig-pad { height:14px; }
         .sig-line { border-top:1px solid #000; height:1px; }
         .sig-label { font-size:8.4px; text-align:center; margin-top:2px; }
 
@@ -124,7 +120,7 @@
         $lateRemainder= $lateTotalMin % 60;
     @endphp
 
-    <div class="employee {{ $idx === 0 ? 'first' : '' }}">
+    <div class="employee">
         <div class="header">
             <div class="org">Attendance Management System</div>
             <div class="doc-title">Attendance Report</div>
@@ -162,11 +158,6 @@
                     $dkey = $day->toDateString();
                     $r    = $byDate->get($dkey);
 
-                    // Decide Status:
-                    // 1) If there's a record and it has a status, show it as-is.
-                    // 2) If NO record and the date is an active non-working holiday, show "Holiday: <name>".
-                    // 3) If still no record and it's Sunday, show "No Duty".
-                    // 4) Otherwise, "Absent".
                     if ($r && !empty($r->status)) {
                         $status = $r->status;
                     } else {
@@ -216,7 +207,6 @@
         </table>
     </div>
 
-    @php $idx++; @endphp
 @endforeach
 
 @if(!empty($truncated) && $truncated)
