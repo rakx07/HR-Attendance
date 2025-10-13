@@ -35,15 +35,13 @@ class AttendanceConsolidate extends Command
             : CarbonImmutable::now($tz)->endOfDay();
 
         $strict = (bool)$this->option('strict');
-        $mode = strtolower((string)$this->option('mode') ?: 'windows');
+        $mode   = strtolower((string)$this->option('mode') ?: 'windows');
         if (!in_array($mode, ['windows', 'sequence'], true)) $mode = 'windows';
 
         $this->info("Consolidating from {$since} to {$until} (strict=".($strict?'yes':'no').", mode={$mode}) ...");
 
-        // Prefer ar.user_id join. If you still rely on device_user_id, swap the join.
         $rows = DB::table('attendance_raw as ar')
             ->join('users as u', 'u.id', '=', 'ar.user_id')
-            // ->join('users as u', 'u.zkteco_user_id', '=', 'ar.device_user_id') // legacy option
             ->whereBetween('ar.punched_at', [$since->toDateTimeString(), $until->toDateTimeString()])
             ->orderBy('u.id')
             ->orderBy('ar.punched_at')
@@ -86,10 +84,7 @@ class AttendanceConsolidate extends Command
                     $amInWinS, $amInWinE, $amOutWinS, $amOutWinE, $pmInWinS, $pmInWinE, $pmOutWinS, $pmOutWinE,
                 ] = $this->resolveShiftWindowWithWindows($windowId, $workDate, $tz);
 
-                // >>> If you want to hard-enforce 11:45 divider regardless of DB, uncomment:
-                // $pmInWinS = Carbon::parse("$workDate 11:45:00", $tz);
-
-                // Sanity: clamp AM windows to end strictly before pmInWinS
+                // Sanity for windows mode: clamp AM windows to before pmInWinS
                 $amCutoff = $pmInWinS->copy()->subSecond();
                 if ($amInWinE->gte($amCutoff))  $amInWinE  = $amCutoff->copy();
                 if ($amOutWinE->gte($amCutoff)) $amOutWinE = $amCutoff->copy();
@@ -98,44 +93,58 @@ class AttendanceConsolidate extends Command
                 $amIn = $amOut = $pmIn = $pmOut = null;
 
                 if ($mode === 'sequence') {
-                        // Custom rule: if first punch >= 11:45 AM → PM In; last punch → PM Out
-                        $threshold = Carbon::parse("$workDate 11:45:00", $tz);
+                    // Hard windows per your rules
+                    $amInEnd    = Carbon::parse("$workDate 11:29:59", $tz); // AM period end
+                    $amOutWinS  = Carbon::parse("$workDate 11:30:00", $tz);
+                    $amOutWinE  = Carbon::parse("$workDate 12:59:59", $tz);
+                    $pmInPrefS  = Carbon::parse("$workDate 11:45:00", $tz); // preferred PM-in window
+                    $pmInPrefE  = Carbon::parse("$workDate 12:59:59", $tz);
+                    $onePM      = Carbon::parse("$workDate 13:00:00", $tz); // ≥ 1:00 PM is late PM-in
+                    $pmOutMin   = Carbon::parse("$workDate 17:00:00", $tz); // earliest OK PM-out
 
-                        $first = $punches->first();
-                        if ($first && $first->gte($threshold)) {
-                            // After 11:45 AM ⇒ PM in/out only
-                            $amIn = $amOut = null;
-                            $pmIn = $first;
-                            $pmOut = $this->pickLastOfDay($punches, $workDate, $tz, $pmIn);
-                        } else {
-                            // Normal sequence fallback
-                            $seq  = $punches->take(4)->values();
-                            $amIn = $seq->get(0);
-                            $amOut= $seq->get(1);
-                            $pmIn = $seq->get(2);
-                            $pmOut= $this->pickLastOfDay($punches, $workDate, $tz, $seq->get(2) ?? $seq->get(1) ?? $seq->get(0));
-                        }
-                    } else {
-
-                    // WINDOWS MODE with your rules:
-
-                    // 1) AM IN: first punch BEFORE the PM-In threshold
-                    $amIn = $this->pickFirstInWindow($punches, $amInWinS, $amInWinE, null);
-
-                    // 2) AM OUT: first punch BEFORE the PM-In threshold (strictly after AM IN if set)
-                    $amOut = $this->pickFirstInWindow($punches, $amOutWinS, $amOutWinE, $amIn);
-
-                    // 3) PM IN: first punch >= PM-In threshold, strictly after AM OUT / AM IN
-                    $pmIn  = $this->pickFirstInWindow($punches, $pmInWinS, $pmInWinE, $amOut ?? $amIn);
-                    if (!$pmIn) {
-                        // Fallback: first punch at/after threshold anywhere later in the day
-                        $pmIn = $this->pickFirstOnOrAfter($punches, $pmInWinS, $amOut ?? $amIn);
+                    // 1) AM IN: first scan ≤ 11:29:59 (extra scans before 11:30 are ignored)
+                    foreach ($punches as $p) {
+                        if ($p->lte($amInEnd)) { $amIn = $p; break; }
+                        if ($p->gte($pmInPrefS)) break; // first punch already PM-ish → no AM
                     }
 
-                    // 4) PM OUT: LAST punch of the day, strictly after PM IN / AM OUT / AM IN
+                    // 2) AM OUT: first scan in 11:30–12:59 strictly after AM-in (if any)
+                    foreach ($punches as $p) {
+                        if ($amIn && $p->lte($amIn)) continue;
+                        if ($p->gte($amOutWinS) && $p->lte($amOutWinE)) { $amOut = $p; break; }
+                    }
+
+                    // 3) PM IN: prefer 11:45–12:59, else first scan ≥ 1:00 PM (late)
+                    foreach ($punches as $p) {
+                        if ($amOut && $p->lte($amOut)) continue;
+                        if ($amIn  && !$amOut && $p->lte($amIn)) continue;
+
+                        if ($p->gte($pmInPrefS) && $p->lte($pmInPrefE)) { $pmIn = $p; break; }
+                        if ($p->gte($onePM)) { $pmIn = $p; break; } // late PM-in
+                    }
+
+                    // 4) PM OUT: always LAST scan of the day (if any).
+                    //    If no pmIn and last scan is AM (~11:30), it's morning-only.
+                    $last = null;
+                    foreach ($punches as $p) { $last = $p; }
+                    if ($last) {
+                        if ($pmIn) {
+                            $pmOut = $last;
+                        } else {
+                            if ($last->gte($pmOutMin)) {
+                                // Rare case: no pmIn but a lone ≥5pm scan → treat as pmOut
+                                $pmOut = $last;
+                            }
+                        }
+                    }
+                } else {
+                    // WINDOWS MODE (unchanged)
+                    $amIn  = $this->pickFirstInWindow($punches, $amInWinS,  $amInWinE,  null);
+                    $amOut = $this->pickFirstInWindow($punches, $amOutWinS, $amOutWinE, $amIn);
+                    $pmIn  = $this->pickFirstInWindow($punches, $pmInWinS,  $pmInWinE,  $amOut ?? $amIn)
+                           ?: $this->pickFirstOnOrAfter($punches, $pmInWinS, $amOut ?? $amIn);
                     $pmOut = $this->pickLastOfDay($punches, $workDate, $tz, $pmIn ?? $amOut ?? $amIn);
 
-                    // 2-punch fallback (AM IN + PM OUT)
                     if ($punches->count() === 2 && !$pmOut) {
                         $amIn  = $punches->first();
                         $pmOut = $punches->last();
@@ -199,7 +208,7 @@ class AttendanceConsolidate extends Command
      * Fallback when columns are missing:
      *   AM-IN : 07:30–11:29
      *   AM-OUT: 11:30–12:59
-     *   PM-IN : 13:00–16:59     (set to 11:45 in DB if you want 11:45 onward)
+     *   PM-IN : 13:00–16:59  (set DB pm_in_start to 11:45 if you want earlier)
      *   PM-OUT: 17:00–23:59
      */
     private function resolveShiftWindowWithWindows($windowId, string $workDate, string $tz): array
@@ -213,7 +222,7 @@ class AttendanceConsolidate extends Command
         $pmInSched  = Carbon::parse("$workDate {$swPmIn}",  $tz);
         $pmOutSched = Carbon::parse("$workDate {$swPmOut}", $tz);
 
-        // Raw windows
+        // Windows
         $amInWinS   = Carbon::parse("$workDate {$win['am_in_start']}",   $tz);
         $amInWinE   = Carbon::parse("$workDate {$win['am_in_end']}",     $tz);
         $amOutWinS  = Carbon::parse("$workDate {$win['am_out_start']}",  $tz);
@@ -223,7 +232,6 @@ class AttendanceConsolidate extends Command
         $pmOutWinS  = Carbon::parse("$workDate {$win['pm_out_start']}",  $tz);
         $pmOutWinE  = Carbon::parse("$workDate {$win['pm_out_end']}",    $tz);
 
-        // Sanitize overlaps/inversions to keep ordering: AM-IN ≤ AM-OUT ≤ PM-IN ≤ PM-OUT
         $W = $this->sanitizeWindows(compact(
             'amInWinS','amInWinE','amOutWinS','amOutWinE','pmInWinS','pmInWinE','pmOutWinS','pmOutWinE'
         ));
@@ -369,7 +377,7 @@ class AttendanceConsolidate extends Command
         return null;
     }
 
-    /** LAST punch of the day (00:00..23:59:59) strictly AFTER $afterIfAny. */
+    /** LAST punch of the day strictly AFTER $afterIfAny. */
     private function pickLastOfDay(\Illuminate\Support\Collection $punches, string $workDate, string $tz, ?Carbon $afterIfAny = null): ?Carbon
     {
         $startDay = Carbon::parse("$workDate 00:00:00", $tz);
@@ -389,27 +397,40 @@ class AttendanceConsolidate extends Command
         Carbon $amInSched, Carbon $amOutSched, Carbon $pmInSched, Carbon $pmOutSched,
         int $graceMinutes
     ): array {
-        // Late
+        // Lateness
         $late = 0;
+
+        // AM grace (e.g., 07:35 if sched 07:30 + 5)
         if ($amIn) {
-            $lateRef = $amInSched->copy()->addMinutes($graceMinutes);
-            if ($amIn->gt($lateRef)) $late = $amIn->diffInMinutes($lateRef);
+            $amLateRef = $amInSched->copy()->addMinutes($graceMinutes);
+            if ($amIn->gt($amLateRef)) {
+                $late += $amIn->diffInMinutes($amLateRef);
+            }
         }
 
-        // Undertime
+        // PM-in late: any pmIn > 13:00:00 (no grace)
+        if ($pmIn && $pmIn->gt($pmInSched)) {
+            $late += $pmIn->diffInMinutes($pmInSched);
+        }
+
+        // Undertime: PM-out < 17:00:00
         $undertime = 0;
         if ($pmOut && $pmOut->lt($pmOutSched)) {
             $undertime = $pmOutSched->diffInMinutes($pmOut);
         }
 
-        // Total hours
+        // Total worked minutes
         $total = 0;
-        if ($amIn && $amOut && $amOut->gt($amIn)) $total += $amIn->diffInMinutes($amOut);
-        if ($pmIn && $pmOut && $pmOut->gt($pmIn)) $total += $pmIn->diffInMinutes($pmOut);
+        if ($amIn && $amOut && $amOut->gt($amIn)) {
+            $total += $amIn->diffInMinutes($amOut);
+        }
+        if ($pmIn && $pmOut && $pmOut->gt($pmIn)) {
+            $total += $pmIn->diffInMinutes($pmOut);
+        }
 
-        // Two-punch fallback: AM-In + PM-Out (subtract scheduled lunch)
+        // 2-punch fallback: AM-in + PM-out (no AM-out/PM-in) → subtract scheduled lunch
         if ($amIn && !$amOut && !$pmIn && $pmOut && $pmOut->gt($amIn)) {
-            $lunch = max(0, $amOutSched->diffInMinutes($pmInSched));
+            $lunch = max(0, $amOutSched->diffInMinutes($pmInSched)); // e.g., 90 mins
             $total = max($total, $amIn->diffInMinutes($pmOut) - $lunch);
         }
 

@@ -5,6 +5,7 @@
   </x-slot>
 
   <div class="py-6 max-w-7xl mx-auto" x-data="{ mode: '{{ request('mode', 'all_active') }}' }">
+
     {{-- FILTERS --}}
     <form method="GET" class="bg-white p-4 rounded shadow grid md:grid-cols-12 gap-3 mb-4">
       {{-- DATE RANGE --}}
@@ -52,7 +53,7 @@
         <label class="text-xs text-gray-600">Status</label>
         <select class="border rounded px-2 py-1 w-full" name="status">
           <option value="">-- Status --</option>
-          @foreach(['Present','Absent','Incomplete'] as $s)
+          @foreach(['Present','Absent','Incomplete','Holiday','Late','Late/Undertime','Undertime'] as $s)
             <option value="{{ $s }}" @selected(request('status')===$s)>{{ $s }}</option>
           @endforeach
         </select>
@@ -98,9 +99,20 @@
 
     {{-- TABLE --}}
     <div class="bg-white rounded shadow overflow-x-auto">
-      <table class="min-w-full text-sm">
+      <style>
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+        .nowrap { white-space: nowrap; }
+        .chip { display:inline-block; padding:0 .4rem; border-radius:.375rem; font-size:.75rem; line-height:1.25rem }
+      </style>
+
+      @php
+        // page subtotals
+        $sumLate = 0; $sumUnder = 0; $sumHours = 0.0;
+      @endphp
+
+      <table class="min-w-full text-[13px]">
         <thead class="bg-gray-50">
-        <tr>
+        <tr class="text-left">
           <th class="px-3 py-2">
             <a href="{{ $toggle('date') }}" class="inline-flex items-center gap-1">
               Date <span class="text-gray-400">{{ $arrow('date') }}</span>
@@ -116,41 +128,112 @@
           <th class="px-3 py-2">AM Out</th>
           <th class="px-3 py-2">PM In</th>
           <th class="px-3 py-2">PM Out</th>
-          <th class="px-3 py-2 text-right">Late</th>
-          <th class="px-3 py-2 text-right">Undertime</th>
+          <th class="px-3 py-2 text-right">Late (min)</th>
+          <th class="px-3 py-2 text-right">Undertime (min)</th>
           <th class="px-3 py-2 text-right">Hours</th>
           <th class="px-3 py-2">Status</th>
+          <th class="px-3 py-2">Remarks</th>
         </tr>
         </thead>
+
         <tbody>
         @forelse($rows as $r)
+          @php
+            // helpers
+            $fmt = fn($ts) => $ts ? \Carbon\Carbon::parse($ts)->format('g:i:s A') : '';
+
+            $hAmOut   = $r->am_out ? \Carbon\Carbon::parse($r->am_out) : null;
+            $hPmIn    = $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)  : null;
+            $hPmOut   = $r->pm_out ? \Carbon\Carbon::parse($r->pm_out) : null;
+
+            $d        = \Carbon\Carbon::parse($r->work_date);
+            $t1130    = $d->copy()->setTime(11,30,0);
+            $t1259    = $d->copy()->setTime(12,59,59);
+            $t1300    = $d->copy()->setTime(13,0,0);
+            $t1700    = $d->copy()->setTime(17,0,0);
+
+            $remarks = [];
+            if (!$hPmIn && !$hPmOut && $hAmOut && $hAmOut->betweenIncluded($t1130, $t1259)) {
+              $remarks[] = 'Morning only';
+            }
+            if ($hPmIn && $hPmIn->gte($t1300)) {
+              $remarks[] = 'Late PM In (≥ 1:00 PM)';
+            }
+            if ($hPmOut && $hPmOut->lt($t1700)) {
+              $remarks[] = 'Undertime PM Out (< 5:00 PM)';
+            }
+
+            // accumulate page totals
+            $sumLate += (int)($r->late_minutes ?? 0);
+            $sumUnder += (int)($r->undertime_minutes ?? 0);
+            $sumHours += (float)($r->total_hours ?? 0);
+          @endphp
+
           <tr class="border-t">
             <td class="px-3 py-2">{{ $r->work_date }}</td>
             <td class="px-3 py-2">{{ $r->name }}</td>
             <td class="px-3 py-2">{{ $r->department }}</td>
 
-            <td class="px-3 py-2">{{ $r->am_in  ? \Carbon\Carbon::parse($r->am_in)->format('g:i A')  : '' }}</td>
-            <td class="px-3 py-2">{{ $r->am_out ? \Carbon\Carbon::parse($r->am_out)->format('g:i A') : '' }}</td>
-            <td class="px-3 py-2">{{ $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)->format('g:i A')  : '' }}</td>
-            <td class="px-3 py-2">{{ $r->pm_out ? \Carbon\Carbon::parse($r->pm_out)->format('g:i A') : '' }}</td>
+            <td class="px-3 py-2 mono nowrap">{{ $fmt($r->am_in) }}</td>
+            <td class="px-3 py-2 mono nowrap">{{ $fmt($r->am_out) }}</td>
+            <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_in) }}</td>
+            <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_out) }}</td>
 
-            <td class="px-3 py-2 text-right">{{ $r->late_minutes }}</td>
-            <td class="px-3 py-2 text-right">{{ $r->undertime_minutes }}</td>
-            <td class="px-3 py-2 text-right">{{ number_format($r->total_hours,2) }}</td>
-            <td class="px-3 py-2">{{ $r->status }}</td>
+            <td class="px-3 py-2 text-right">{{ $r->late_minutes ?? 0 }}</td>
+            <td class="px-3 py-2 text-right">{{ $r->undertime_minutes ?? 0 }}</td>
+            <td class="px-3 py-2 text-right">{{ number_format((float)($r->total_hours ?? 0),2) }}</td>
+
+            <td class="px-3 py-2">
+              @php
+                $st = (string)($r->status ?? '—');
+                $bg = 'bg-gray-200 text-gray-800';
+                if(str_contains($st,'Late') && str_contains($st,'Under')) $bg='bg-amber-200 text-amber-900';
+                elseif($st==='Present') $bg='bg-emerald-200 text-emerald-900';
+                elseif($st==='Holiday') $bg='bg-sky-200 text-sky-900';
+                elseif($st==='Absent')  $bg='bg-rose-200 text-rose-900';
+                elseif(str_contains($st,'Late')) $bg='bg-yellow-200 text-yellow-900';
+                elseif(str_contains($st,'Under')) $bg='bg-orange-200 text-orange-900';
+              @endphp
+              <span class="chip {{ $bg }}">{{ $st }}</span>
+            </td>
+
+            <td class="px-3 py-2">
+              @if($remarks)
+                @foreach($remarks as $rem)
+                  <span class="chip bg-indigo-100 text-indigo-800 mr-1">{{ $rem }}</span>
+                @endforeach
+              @endif
+            </td>
           </tr>
         @empty
           <tr>
-            <td colspan="11" class="px-3 py-6 text-center text-gray-500">
+            <td colspan="12" class="px-3 py-6 text-center text-gray-500">
               No records{{ request('from') && request('to') ? " for ".(request('mode')==='employee' ? 'selected employee' : 'all active')." between ".request('from')." and ".request('to') : '' }}.
             </td>
           </tr>
         @endforelse
         </tbody>
+
+        {{-- PAGE SUBTOTALS --}}
+        @if($rows->count())
+          <tfoot class="bg-gray-50">
+            <tr class="font-semibold border-t">
+              <td colspan="7" class="px-3 py-2 text-right">Page totals:</td>
+              <td class="px-3 py-2 text-right">{{ $sumLate }}</td>
+              <td class="px-3 py-2 text-right">{{ $sumUnder }}</td>
+              <td class="px-3 py-2 text-right">{{ number_format($sumHours,2) }}</td>
+              <td colspan="2"></td>
+            </tr>
+          </tfoot>
+        @endif
       </table>
     </div>
 
-    <div class="mt-3">{{ $rows->links() }}</div>
+    <div class="mt-3">{{ $rows->withQueryString()->links() }}</div>
+
+    <p class="text-xs text-gray-500 mt-2">
+      Display assumes <em>sequence</em> consolidation logic (AM-out only from 11:30–12:59, PM-in ≥ 11:45 preferred, late if ≥ 1:00 PM, PM-out last scan; undertime if PM-out &lt; 5:00 PM).
+    </p>
   </div>
 
   <script src="https://unpkg.com/alpinejs" defer></script>

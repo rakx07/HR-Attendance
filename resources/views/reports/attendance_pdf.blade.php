@@ -4,11 +4,22 @@
     <meta charset="utf-8">
     <title>Attendance Report</title>
     <style>
-        /* Fit one month per Letter page */
-        @page { margin: 10mm 8mm; }
+        /* Letter portrait (8.5" x 11") and tight margins to fit one month per page */
+        @page {
+            size: letter portrait;
+            margin: 10mm 8mm;
+        }
 
-        /* Compact type */
+        /* --- Compact typography/layout to keep ONE PAGE per employee --- */
         body { font-family: DejaVu Sans, sans-serif; color:#111; font-size:9px; line-height:1.15; }
+
+        .employee {
+            /* Very important for DomPDF pagination */
+            page-break-before: always;
+            page-break-after: always;
+            page-break-inside: avoid;
+        }
+        .employee.first { page-break-before: avoid; } /* first employee stays on page 1 */
 
         .header { text-align:center; margin-bottom:4px; }
         .org { font-weight:700; font-size:10px; letter-spacing:.15px; }
@@ -21,13 +32,18 @@
         .right { text-align:right; }
         .center { text-align:center; }
 
-        /* Main table */
+        /* Main table (extra compact) */
         table { width:100%; border-collapse:collapse; table-layout:fixed; }
         th, td { border:0.6pt solid #444; padding:2px 2px; }
-        th { font-weight:700; text-align:center; font-size:8.8px; }
-        td { vertical-align:top; }
+        th { font-weight:700; text-align:center; font-size:8.6px; }
+        td { vertical-align:top; font-size:8.6px; }
         thead th { line-height:1.05; }
         tbody tr:nth-child(odd) td { background:#fafafa; }
+
+        /* Prevent row splits to keep the layout stable within a single page */
+        tr { page-break-inside: avoid; }
+        thead { display: table-header-group; }
+        tfoot { display: table-footer-group; }
 
         .w-date { width:12%; }
         .w-time { width:11%; }
@@ -35,20 +51,20 @@
         .w-hrs  { width:7.5%; }
         .w-stat { width:12%; }
 
-        .time { white-space:nowrap; font-size:8.6px; }
+        .time { white-space:nowrap; font-size:8.5px; }
 
         .totals { margin-top:4px; font-weight:700; }
 
         /* Signatures */
-        .sig-table { width:100%; border-collapse:collapse; margin-top:10px; }
+        .sig-table { width:100%; border-collapse:collapse; margin-top:8px; }
         .sig-table td { border:0; vertical-align:bottom; }
         .sig-cell { width:50%; }
-        .sig-pad { height:18px; }
+        .sig-pad { height:14px; } /* slightly smaller pad to save space */
         .sig-line { border-top:1px solid #000; height:1px; }
-        .sig-label { font-size:8.8px; text-align:center; margin-top:2px; }
+        .sig-label { font-size:8.4px; text-align:center; margin-top:2px; }
 
-        /* Truncation note */
-        .truncate-note { margin-top:6px; font-size:8.6px; color:#666; }
+        /* Truncation note (if controller sets it) */
+        .truncate-note { margin-top:6px; font-size:8.4px; color:#666; }
     </style>
 </head>
 <body>
@@ -108,101 +124,99 @@
         $lateRemainder= $lateTotalMin % 60;
     @endphp
 
-    <div class="header">
-        <div class="org">Attendance Management System</div>
-        <div class="doc-title">Attendance Report</div>
-    </div>
-    <div class="line"></div>
+    <div class="employee {{ $idx === 0 ? 'first' : '' }}">
+        <div class="header">
+            <div class="org">Attendance Management System</div>
+            <div class="doc-title">Attendance Report</div>
+        </div>
+        <div class="line"></div>
 
-    <table class="meta-table">
-        <tr>
-            <td><strong>Employee:</strong> {{ $emp->name }} <span class="small">(#{{ $userId }})</span></td>
-            <td class="right"><strong>Generated:</strong> {{ now()->format('Y-m-d H:i:s') }}</td>
-        </tr>
-        <tr>
-            <td><strong>Department:</strong> {{ $emp->department ?? '—' }}</td>
-            <td class="right"><strong>Range:</strong> {{ $rangeText }}</td>
-        </tr>
-    </table>
-
-    <table style="margin-top:4px;">
-        <thead>
+        <table class="meta-table">
             <tr>
-                <th class="w-date">Date</th>
-                <th class="w-time">AM In</th>
-                <th class="w-time">AM Out</th>
-                <th class="w-time">PM In</th>
-                <th class="w-time">PM Out</th>
-                <th class="w-min">Late (min)</th>
-                <th class="w-min">Undertime (min)</th>
-                <th class="w-hrs">Hours</th>
-                <th class="w-stat">Status</th>
+                <td><strong>Employee:</strong> {{ $emp->name }} <span class="small">(#{{ $userId }})</span></td>
+                <td class="right"><strong>Generated:</strong> {{ now()->format('Y-m-d H:i:s') }}</td>
             </tr>
-        </thead>
-        <tbody>
-        @foreach($period as $day)
-            @php
-                $dkey = $day->toDateString();
-                $r    = $byDate->get($dkey);
+            <tr>
+                <td><strong>Department:</strong> {{ $emp->department ?? '—' }}</td>
+                <td class="right"><strong>Range:</strong> {{ $rangeText }}</td>
+            </tr>
+        </table>
 
-                // Decide Status:
-                // 1) If there's a record and it has a status (e.g., Present, Vacation Leave, Sick Leave, Holiday from your consolidation),
-                //    show it as-is.
-                // 2) If there's NO record and the date is an active-calendar non-working holiday, show "Holiday: <name>".
-                // 3) If still no record and it's Sunday, show "No Duty".
-                // 4) Otherwise, "Absent".
-                if ($r && !empty($r->status)) {
-                    $status = $r->status;
-                } else {
-                    $h = $holidays->get($dkey);
-                    if ($h && (int)$h->is_non_working === 1 && !$r) {
-                        $status = 'Holiday: ' . ($h->name ?? '—');
-                    } elseif (!$r && $day->isSunday()) {
-                        $status = 'No Duty';
+        <table style="margin-top:4px;">
+            <thead>
+                <tr>
+                    <th class="w-date">Date</th>
+                    <th class="w-time">AM In</th>
+                    <th class="w-time">AM Out</th>
+                    <th class="w-time">PM In</th>
+                    <th class="w-time">PM Out</th>
+                    <th class="w-min">Late (min)</th>
+                    <th class="w-min">Undertime (min)</th>
+                    <th class="w-hrs">Hours</th>
+                    <th class="w-stat">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach($period as $day)
+                @php
+                    $dkey = $day->toDateString();
+                    $r    = $byDate->get($dkey);
+
+                    // Decide Status:
+                    // 1) If there's a record and it has a status, show it as-is.
+                    // 2) If NO record and the date is an active non-working holiday, show "Holiday: <name>".
+                    // 3) If still no record and it's Sunday, show "No Duty".
+                    // 4) Otherwise, "Absent".
+                    if ($r && !empty($r->status)) {
+                        $status = $r->status;
                     } else {
-                        $status = $r->status ?? 'Absent';
+                        $h = $holidays->get($dkey);
+                        if ($h && (int)$h->is_non_working === 1 && !$r) {
+                            $status = 'Holiday: ' . ($h->name ?? '—');
+                        } elseif (!$r && $day->isSunday()) {
+                            $status = 'No Duty';
+                        } else {
+                            $status = $r->status ?? 'Absent';
+                        }
                     }
-                }
-            @endphp
+                @endphp
+                <tr>
+                    <td class="center">{{ $dkey }}</td>
+                    <td class="center time">{{ $r ? $timeCell($r->am_in)  : '—' }}</td>
+                    <td class="center time">{{ $r ? $timeCell($r->am_out) : '—' }}</td>
+                    <td class="center time">{{ $r ? $timeCell($r->pm_in)  : '—' }}</td>
+                    <td class="center time">{{ $r ? $timeCell($r->pm_out) : '—' }}</td>
+                    <td class="right">{{ $r->late_minutes      ?? 0 }}</td>
+                    <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
+                    <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>
+                    <td class="center">{{ $status }}</td>
+                </tr>
+            @endforeach
+            </tbody>
+        </table>
+
+        <div class="totals">
+            Total Late: {{ $lateHours }} hr {{ $lateRemainder }} min ({{ $lateTotalMin }} min)
+        </div>
+
+        {{-- Signatures --}}
+        <table class="sig-table">
             <tr>
-                <td class="center">{{ $dkey }}</td>
-                <td class="center time">{{ $r ? $timeCell($r->am_in)  : '—' }}</td>
-                <td class="center time">{{ $r ? $timeCell($r->am_out) : '—' }}</td>
-                <td class="center time">{{ $r ? $timeCell($r->pm_in)  : '—' }}</td>
-                <td class="center time">{{ $r ? $timeCell($r->pm_out) : '—' }}</td>
-                <td class="right">{{ $r->late_minutes      ?? 0 }}</td>
-                <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
-                <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>
-                <td class="center">{{ $status }}</td>
+                <td class="sig-cell">
+                    <div class="sig-pad"></div>
+                    <div class="sig-line"></div>
+                    <div class="sig-label"><strong>{{ $emp->name }}</strong> — Employee</div>
+                </td>
+                <td class="sig-cell">
+                    <div class="sig-pad"></div>
+                    <div class="sig-line"></div>
+                    <div class="sig-label"><strong>Unit Head</strong></div>
+                </td>
             </tr>
-        @endforeach
-        </tbody>
-    </table>
-
-    <div class="totals">
-        Total Late: {{ $lateHours }} hr {{ $lateRemainder }} min ({{ $lateTotalMin }} min)
+        </table>
     </div>
-
-    {{-- Signatures --}}
-    <table class="sig-table">
-        <tr>
-            <td class="sig-cell">
-                <div class="sig-pad"></div>
-                <div class="sig-line"></div>
-                <div class="sig-label"><strong>{{ $emp->name }}</strong> — Employee</div>
-            </td>
-            <td class="sig-cell">
-                <div class="sig-pad"></div>
-                <div class="sig-line"></div>
-                <div class="sig-label"><strong>Unit Head</strong></div>
-            </td>
-        </tr>
-    </table>
 
     @php $idx++; @endphp
-    @if($idx < $count)
-        <div class="page-break"></div>
-    @endif
 @endforeach
 
 @if(!empty($truncated) && $truncated)
