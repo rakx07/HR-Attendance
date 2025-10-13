@@ -87,8 +87,13 @@ public function downloadTemplate()
     public function upload(Request $r)
     {
         $r->validate(['file' => ['required','mimes:xlsx,xls']]);
-        Excel::import(new EmployeesImport, $r->file('file'));
-        return back()->with('success', 'Employees imported.');
+
+        $import = new EmployeesImport(); // has counters
+        Excel::import($import, $r->file('file'));
+
+        return back()
+            ->with('success', 'Import completed.')
+            ->with('import_summary', $import->summary());
     }
 
     /**

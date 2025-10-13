@@ -9,6 +9,7 @@
     <div class="max-w-5xl mx-auto sm:px-6 lg:px-8">
       <div class="bg-white dark:bg-gray-800 shadow-sm sm:rounded-lg p-6 space-y-6">
 
+        {{-- Flash messages --}}
         @if(session('success'))
           <div class="rounded border border-green-300 bg-green-50 text-green-800 px-3 py-2 text-sm">
             {{ session('success') }}
@@ -35,24 +36,85 @@
         </div>
 
         {{-- Import form --}}
-        <form action="{{ route('employees.upload') }}" method="POST" enctype="multipart/form-data"
+        <form id="employees-upload-form"
+              action="{{ route('employees.upload') }}"
+              method="POST"
+              enctype="multipart/form-data"
               class="space-y-3 border rounded p-4 dark:border-gray-700">
           @csrf
           <div>
             <label class="block text-sm mb-1">Upload Excel (.xlsx / .xls)</label>
             <input type="file" name="file" required
                    class="w-full border rounded p-2 dark:bg-gray-900 dark:border-gray-700">
+
             <p class="text-xs text-gray-500 mt-1">
-              Columns must match the template headings. If <strong>shift_window_id</strong> is blank,
-              the system assigns the default (first) shift automatically.
+              Columns must match the template headings.
+              If <strong>shift_window_id</strong> is blank, the system assigns
+              <strong>“8-5 Standard” (Shift ID 2)</strong> automatically.
+              Email may be blank as long as <strong>school_id</strong> is present.
             </p>
           </div>
+
+          {{-- Loading bar (hidden until submit) --}}
+          <div id="upload-progress" class="hidden">
+            <div class="w-full bg-gray-200 dark:bg-gray-900 rounded h-2 overflow-hidden">
+              <div id="upload-progress-bar"
+                   class="h-2 bg-blue-600 transition-all duration-200"
+                   style="width:0%"></div>
+            </div>
+            <p class="text-xs text-gray-500 mt-1" id="upload-progress-text">Uploading… please wait</p>
+          </div>
+
           <div class="text-right">
-            <button class="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white">
+            <button id="upload-submit" class="px-3 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white">
               Import
             </button>
           </div>
         </form>
+
+        {{-- Summary after upload --}}
+        @php $sum = session('import_summary'); @endphp
+        @if($sum)
+          <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
+            <h4 class="font-semibold mb-2">Import Summary</h4>
+
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+              <div class="p-2 rounded bg-green-50 border border-green-200 text-green-800">
+                <div class="font-medium">Created</div>
+                <div class="text-lg">{{ $sum['created'] ?? 0 }}</div>
+              </div>
+              <div class="p-2 rounded bg-blue-50 border border-blue-200 text-blue-800">
+                <div class="font-medium">Updated</div>
+                <div class="text-lg">{{ $sum['updated'] ?? 0 }}</div>
+              </div>
+              <div class="p-2 rounded bg-amber-50 border border-amber-200 text-amber-800">
+                <div class="font-medium">Duplicated</div>
+                <div class="text-lg">{{ $sum['duplicated'] ?? 0 }}</div>
+              </div>
+              <div class="p-2 rounded bg-gray-50 border border-gray-200 text-gray-800">
+                <div class="font-medium">Skipped</div>
+                <div class="text-lg">{{ $sum['skipped'] ?? 0 }}</div>
+              </div>
+              <div class="p-2 rounded bg-red-50 border border-red-200 text-red-800">
+                <div class="font-medium">Failed</div>
+                <div class="text-lg">{{ $sum['failed'] ?? 0 }}</div>
+              </div>
+            </div>
+
+            @if(!empty($sum['fail_messages']))
+              <details class="mt-3">
+                <summary class="cursor-pointer text-sm text-red-700">
+                  See first {{ min(count($sum['fail_messages']), 10) }} errors
+                </summary>
+                <ul class="mt-2 text-xs list-disc list-inside text-red-700">
+                  @foreach(array_slice($sum['fail_messages'], 0, 10) as $msg)
+                    <li>{{ $msg }}</li>
+                  @endforeach
+                </ul>
+              </details>
+            @endif
+          </div>
+        @endif
 
         {{-- Quick-create (optional) --}}
         <form action="{{ route('employees.store') }}" method="POST" class="space-y-3 border rounded p-4 dark:border-gray-700">
@@ -169,4 +231,31 @@
     .btn-primary { background:#2563eb; color:white; padding:.5rem .9rem; border-radius:.5rem; }
     .btn-primary:hover { background:#1e40af; }
   </style>
+
+  <script>
+    (function () {
+      const form = document.getElementById('employees-upload-form');
+      const barWrap = document.getElementById('upload-progress');
+      const bar = document.getElementById('upload-progress-bar');
+      const btn = document.getElementById('upload-submit');
+      const text = document.getElementById('upload-progress-text');
+
+      if (!form) return;
+
+      form.addEventListener('submit', function () {
+        barWrap.classList.remove('hidden');
+        btn.disabled = true;
+        btn.classList.add('opacity-60','cursor-not-allowed');
+
+        // Smooth fake-progress while waiting for server response (full page reload)
+        let pct = 0;
+        const tick = () => {
+          pct = Math.min(98, pct + Math.random() * 6);
+          bar.style.width = pct.toFixed(0) + '%';
+        };
+        const i = setInterval(tick, 180);
+        window.addEventListener('beforeunload', () => clearInterval(i));
+      });
+    })();
+  </script>
 </x-app-layout>

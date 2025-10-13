@@ -6,7 +6,6 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
-use App\Models\ShiftWindow; // <-- important
 
 class User extends Authenticatable
 {
@@ -15,22 +14,30 @@ class User extends Authenticatable
     protected $guard_name = 'web';
 
     protected $fillable = [
-        'name','email','password',
-        'zkteco_user_id','shift_window_id',
-        'flexi_start','flexi_end','department','active',
+        // Identity & auth
+        'email', 'password', 'school_id', 'zkteco_user_id',
+
+        // Names
+        'last_name', 'first_name', 'middle_name',
+
+        // HR fields
+        'department', 'department_id',
+        'shift_window_id', 'flexi_start', 'flexi_end',
+        'active',
     ];
 
     protected $hidden = ['password','remember_token'];
 
     protected $casts = [
         'email_verified_at' => 'datetime',
-        'active' => 'boolean',
+        'active'            => 'boolean',
     ];
 
     public function shiftWindow()
     {
-        return $this->belongsTo(ShiftWindow::class, 'shift_window_id');
+        return $this->belongsTo(\App\Models\ShiftWindow::class, 'shift_window_id');
     }
+
     public function department()
     {
         return $this->belongsTo(\App\Models\Department::class);
@@ -40,5 +47,4 @@ class User extends Authenticatable
     {
         return $this->hasMany(\App\Models\DepartmentTransfer::class);
     }
-
 }

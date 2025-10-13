@@ -4,49 +4,70 @@
     <meta charset="utf-8">
     <title>Attendance Report</title>
     <style>
-        @page { margin: 16mm 12mm; }
-        body { font-family: DejaVu Sans, sans-serif; color: #111; font-size: 10.5px; }
-        .header { text-align: center; margin-bottom: 6px; }
-        .org { font-weight: 700; font-size: 12px; letter-spacing: .2px; }
-        .doc-title { font-size: 14px; font-weight: 700; margin-top: 2px; }
-        .line { border-top: 1px solid #000; margin: 6px 0 8px; }
+        /* Tighter page to fit 1 month per page */
+        @page { margin: 10mm 8mm; }
 
+        /* Compact typography */
+        body { font-family: DejaVu Sans, sans-serif; color: #111; font-size: 9px; line-height: 1.15; }
+
+        .header { text-align: center; margin-bottom: 4px; }
+        .org { font-weight: 700; font-size: 10px; letter-spacing: .15px; }
+        .doc-title { font-size: 12px; font-weight: 700; margin-top: 1px; }
+        .line { border-top: 1px solid #000; margin: 4px 0 6px; }
+
+        /* Meta */
         .meta-table { width: 100%; border-collapse: collapse; }
-        .meta-table td { padding: 2px 0; vertical-align: top; }
+        .meta-table td { padding: 1px 0; vertical-align: top; }
         .right { text-align: right; }
         .center { text-align: center; }
 
+        /* Main table — compact */
         table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        th, td { border: 1px solid #444; padding: 4px 4px; }
-        th { font-weight: 700; text-align: center; }
+        th, td { border: 0.6pt solid #444; padding: 2px 2px; }
+        th { font-weight: 700; text-align: center; font-size: 8.8px; }
         td { vertical-align: top; }
 
         tbody tr:nth-child(odd) td { background: #fafafa; }
 
-        .totals { margin-top: 6px; font-weight: 700; }
-        .small { font-size: 10px; color: #555; }
+        .totals { margin-top: 4px; font-weight: 700; }
 
         .page-break { page-break-after: always; }
         tr { page-break-inside: avoid; }
-        thead th { line-height: 1.1; }
+        thead th { line-height: 1.05; }
 
-        .w-date { width: 13%; }
+        /* Column widths tuned to keep times on one line */
+        .w-date { width: 12%; }
         .w-time { width: 11%; }
-        .w-min  { width: 9.5%; }
-        .w-hrs  { width: 8%; }
-        .w-stat { width: 13%; }
+        .w-min  { width: 9%; }
+        .w-hrs  { width: 7.5%; }
+        .w-stat { width: 12%; }
+
+        /* Keep time strings on one line & slightly smaller for density */
+        .time { white-space: nowrap; font-size: 8.6px; }
+
+        /* Signature area (table-based for dompdf compatibility) */
+        .sig-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .sig-table td { border: 0; vertical-align: bottom; }
+        .sig-cell { width: 50%; }
+        .sig-pad { height: 18px; }
+        .sig-line { border-top: 1px solid #000; height: 1px; }
+        .sig-label { font-size: 8.8px; text-align: center; margin-top: 2px; }
+
+        /* Truncation note */
+        .truncate-note { margin-top: 6px; font-size: 8.6px; color: #666; }
     </style>
 </head>
 <body>
 @php
-    // Helper: 12-hour format only
+    // Helper: 12-hour format with seconds
     $timeCell = function (?string $ts) {
         if (!$ts) return '—';
-        return \Carbon\Carbon::parse($ts)->format('g:i A');
+        return \Carbon\Carbon::parse($ts)->format('g:i:s A');
     };
 
     $grouped = $rows->groupBy('user_id');
-    $idx = 0; $count = $grouped->count();
+    $idx = 0;
+    $count = $grouped->count();
 @endphp
 
 @foreach($grouped as $userId => $empRows)
@@ -56,6 +77,12 @@
         $lateTotalMin = (int) $empRows->sum('late_minutes');
         $lateHours = intdiv($lateTotalMin, 60);
         $lateRemainder = $lateTotalMin % 60;
+
+        // Sort strictly by day number (1 → 31) inside the selected range
+        $empRowsSorted = $empRows->sortBy(function($r) {
+            try { return \Carbon\Carbon::parse($r->work_date)->day; }
+            catch (\Throwable $e) { return 0; }
+        });
     @endphp
 
     <div class="header">
@@ -67,7 +94,7 @@
     <table class="meta-table">
         <tr>
             <td><strong>Employee:</strong> {{ $emp->name }} <span class="small">(#{{ $userId }})</span></td>
-            <td class="right"><strong>Generated:</strong> {{ now()->format('Y-m-d H:i') }}</td>
+            <td class="right"><strong>Generated:</strong> {{ now()->format('Y-m-d H:i:s') }}</td>
         </tr>
         <tr>
             <td><strong>Department:</strong> {{ $emp->department ?? '—' }}</td>
@@ -75,7 +102,7 @@
         </tr>
     </table>
 
-    <table style="margin-top: 6px;">
+    <table style="margin-top: 4px;">
         <thead>
             <tr>
                 <th class="w-date">Date</th>
@@ -90,13 +117,13 @@
             </tr>
         </thead>
         <tbody>
-        @foreach($empRows as $r)
+        @foreach($empRowsSorted as $r)
             <tr>
                 <td class="center">{{ $r->work_date }}</td>
-                <td class="center">{!! $timeCell($r->am_in)  !!}</td>
-                <td class="center">{!! $timeCell($r->am_out) !!}</td>
-                <td class="center">{!! $timeCell($r->pm_in)  !!}</td>
-                <td class="center">{!! $timeCell($r->pm_out) !!}</td>
+                <td class="center time">{{ $timeCell($r->am_in) }}</td>
+                <td class="center time">{{ $timeCell($r->am_out) }}</td>
+                <td class="center time">{{ $timeCell($r->pm_in) }}</td>
+                <td class="center time">{{ $timeCell($r->pm_out) }}</td>
                 <td class="right">{{ $r->late_minutes ?? 0 }}</td>
                 <td class="right">{{ $r->undertime_minutes ?? 0 }}</td>
                 <td class="right">{{ number_format((float)($r->total_hours ?? 0), 2) }}</td>
@@ -110,12 +137,37 @@
         Total Late: {{ $lateHours }} hr {{ $lateRemainder }} min ({{ $lateTotalMin }} min)
     </div>
 
+    {{-- Signatures (compact) --}}
+    <table class="sig-table">
+        <tr>
+            <td class="sig-cell">
+                <div class="sig-pad"></div>
+                <div class="sig-line"></div>
+                <div class="sig-label"><strong>{{ $emp->name }}</strong> — Employee</div>
+            </td>
+            <td class="sig-cell">
+                <div class="sig-pad"></div>
+                <div class="sig-line"></div>
+                <div class="sig-label"><strong>Unit Head</strong></div>
+            </td>
+        </tr>
+    </table>
+
     @php $idx++; @endphp
     @if($idx < $count)
         <div class="page-break"></div>
     @endif
 @endforeach
 
+{{-- Truncation notice when controller capped the rows --}}
+@if(!empty($truncated) && $truncated)
+    <div class="truncate-note">
+        Note: PDF output truncated to {{ $maxRows }} of {{ $totalRows }} rows to keep the file printable.
+        Use Excel export for the full dataset.
+    </div>
+@endif
+
+{{-- Page numbering --}}
 <script type="text/php">
 if (isset($pdf)) {
     $font = $fontMetrics->get_font("DejaVu Sans", "normal");
