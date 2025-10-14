@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\AttendanceExport;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Http\JsonResponse;
+use Carbon\Carbon;
 
 class ReportController extends Controller
 {
@@ -50,11 +52,9 @@ class ReportController extends Controller
     public function pdf(Request $r)
     {
         // Lift limits for heavy renders (THIS REQUEST ONLY)
-        @ini_set('max_execution_time', '0'); // 0 = unlimited
+        @ini_set('max_execution_time', '0');
         @ini_set('memory_limit', '1024M');
-        if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
-        }
+        if (function_exists('set_time_limit')) @set_time_limit(0);
         DB::connection()->disableQueryLog();
 
         // Sort
@@ -76,9 +76,7 @@ class ReportController extends Controller
             'maxRows'   => null,
         ])->setPaper('letter', 'portrait');
 
-        if (method_exists($pdf, 'setOption')) {
-            $pdf->setOption('dpi', 72);
-        }
+        if (method_exists($pdf, 'setOption')) $pdf->setOption('dpi', 72);
 
         return $pdf->stream('attendance_' . now()->format('Ymd_His') . '.pdf');
     }
@@ -220,5 +218,267 @@ class ReportController extends Controller
               ->whereNull('ad.pm_in')
               ->whereNull('ad.pm_out');
         }
+    }
+
+    /* ===================== RAW LOGS API (for the modal) ===================== */
+
+    public function raw(Request $r): JsonResponse
+    {
+        $v = $r->validate([
+            'user_id'  => ['required','integer'],
+            'date'     => ['required','date_format:Y-m-d'],
+            'page'     => ['sometimes','integer','min:1'],
+            'per_page' => ['sometimes','integer','min:1','max:100'],
+        ]);
+
+        $userId  = (int) $v['user_id'];
+        $date    = $v['date'];
+        $page    = (int) $r->input('page', 1);
+        $perPage = (int) $r->input('per_page', 25);
+
+        // Your users table has zkteco_user_id (per screenshots). school_id may also exist.
+        $user = DB::table('users')
+            ->select(['id', 'zkteco_user_id', 'school_id'])
+            ->where('id', $userId)
+            ->first();
+
+        if (!$user) {
+            return response()->json([
+                'rows' => [],
+                'meta' => ['current_page'=>1,'last_page'=>1,'per_page'=>$perPage,'total'=>0,'prev'=>null,'next'=>null],
+                'error' => 'User not found',
+            ], 404);
+        }
+
+        $zktecoId = $user->zkteco_user_id ? (string)$user->zkteco_user_id : null;
+        $schoolId = $user->school_id ? (string)$user->school_id : null;
+
+        $start = Carbon::parse($date)->startOfDay();
+        $end   = Carbon::parse($date)->endOfDay();
+
+        $q = DB::table('attendance_raw')
+            ->whereBetween('punched_at', [$start, $end])
+            ->orderBy('punched_at', 'asc');
+
+        // Match by multiple identifiers (robust for different importers)
+        $q->where(function ($w) use ($userId, $zktecoId, $schoolId) {
+            $w->where('user_id', $userId);
+
+            if (!empty($zktecoId)) {
+                $w->orWhere('device_user_id', $zktecoId);
+
+                $needle = str_replace(['%','_'], ['\%','\_'], $zktecoId);
+                $w->orWhere('payload', 'LIKE', '%"emp_code":"'.$needle.'"%')
+                  ->orWhere('payload', 'LIKE', '%"emp_id":"'.$needle.'"%')
+                  ->orWhere('payload', 'LIKE', '%"emp_id":'.$needle.'%');
+            }
+
+            if (!empty($schoolId)) {
+                $needle = str_replace(['%','_'], ['\%','\_'], $schoolId);
+                $w->orWhere('payload', 'LIKE', '%"school_id":"'.$needle.'"%');
+            }
+        });
+
+        try {
+            $p = $q->paginate(
+                $perPage,
+                ['id','punched_at','punch_type','source','device_sn','payload'],
+                'page',
+                $page
+            );
+        } catch (\Throwable $e) {
+            \Log::error('attendance_raw query failed', ['err'=>$e->getMessage()]);
+            return response()->json([
+                'rows' => [],
+                'meta' => ['current_page'=>1,'last_page'=>1,'per_page'=>$perPage,'total'=>0,'prev'=>null,'next'=>null],
+                'error' => 'Query failed',
+            ], 500);
+        }
+
+        $rows = collect($p->items())->map(function ($row) {
+            return [
+                'id'         => $row->id,
+                'punched_at' => Carbon::parse($row->punched_at)->format('Y-m-d H:i:s'),
+            ];
+        })->values();
+
+        $append = ['user_id'=>$userId, 'date'=>$date, 'per_page'=>$perPage];
+        $prev   = $p->previousPageUrl() ? $p->appends($append)->previousPageUrl() : null;
+        $next   = $p->nextPageUrl()     ? $p->appends($append)->nextPageUrl()     : null;
+
+        return response()->json([
+            'rows' => $rows,
+            'meta' => [
+                'current_page' => $p->currentPage(),
+                'last_page'    => $p->lastPage(),
+                'per_page'     => $p->perPage(),
+                'total'        => $p->total(),
+                'prev'         => $prev,
+                'next'         => $next,
+            ],
+        ]);
+    }
+
+    public function rawUpdate(Request $r): JsonResponse
+    {
+        // Placeholder for future raw-log edits (not used by the current UI)
+        return response()->json(['ok' => true]);
+    }
+
+    /** Fetch a day’s consolidated values for the modal (prefill). */
+    public function day(Request $r): JsonResponse
+    {
+        $v = $r->validate([
+            'user_id' => ['required','integer'],
+            'date'    => ['required','date_format:Y-m-d'],
+        ]);
+
+        $rec = DB::table('attendance_days')
+            ->where('user_id', $v['user_id'])
+            ->where('work_date', $v['date'])
+            ->first();
+
+        $day = [
+            'user_id' => (int)$v['user_id'],
+            'work_date' => $v['date'],
+            'am_in' => $rec->am_in ?? null,
+            'am_out'=> $rec->am_out ?? null,
+            'pm_in' => $rec->pm_in ?? null,
+            'pm_out'=> $rec->pm_out ?? null,
+            'late_minutes' => (int)($rec->late_minutes ?? 0),
+            'undertime_minutes' => (int)($rec->undertime_minutes ?? 0),
+            'total_hours' => (float)($rec->total_hours ?? 0),
+            'status' => $rec->status ?? '',
+        ];
+
+        return response()->json(['day'=>$day]);
+    }
+
+    /**
+     * Save consolidated AM/PM times and RECOMPUTE late / undertime / hours.
+     * This is what keeps the table + PDF aligned with edits from the modal.
+     */
+    public function dayUpdate(Request $r): JsonResponse
+    {
+        $v = $r->validate([
+            'user_id' => ['required','integer'],
+            'date'    => ['required','date_format:Y-m-d'],
+            'am_in'   => ['nullable','date_format:H:i:s'],
+            'am_out'  => ['nullable','date_format:H:i:s'],
+            'pm_in'   => ['nullable','date_format:H:i:s'],
+            'pm_out'  => ['nullable','date_format:H:i:s'],
+        ]);
+
+        $userId = (int)$v['user_id'];
+        $date   = $v['date'];
+
+        // Pull shift + grace + per-day schedule
+        $user = DB::table('users')->select('shift_window_id')->where('id',$userId)->first();
+        $shiftId = (int)($user->shift_window_id ?? 0);
+        $grace   = (int)DB::table('shift_windows')->where('id',$shiftId)->value('grace_minutes');
+
+        $dow0 = Carbon::parse($date)->dayOfWeek; // 0..6 Sun..Sat
+        // In DB, many store dow as 1..7 (Mon..Sun). Support both.
+        $rowDay = DB::table('shift_window_days')
+            ->where('shift_window_id',$shiftId)
+            ->where(function($w) use($dow0){
+                $w->where('dow', $dow0 === 0 ? 7 : $dow0) // 1..7 Mon..Sun
+                  ->orWhere('dow', $dow0);               // 0..6 Sun..Sat (fallback)
+            })
+            ->first();
+
+        $isWorking = $rowDay
+            ? (int)($rowDay->is_working ?? 1)
+            : ($dow0===Carbon::SUNDAY ? 0 : 1);
+
+        $sched = [
+            'work'  => $isWorking,
+            'am_in' => $rowDay->am_in ?? null,
+            'am_out'=> $rowDay->am_out ?? null,
+            'pm_in' => $rowDay->pm_in ?? null,
+            'pm_out'=> $rowDay->pm_out ?? null,
+        ];
+
+        // Build full timestamps from date + time (if provided)
+        $stamp = fn($t) => $t ? "{$date} {$t}" : null;
+
+        $am_in  = $stamp($v['am_in']  ?? null);
+        $am_out = $stamp($v['am_out'] ?? null);
+        $pm_in  = $stamp($v['pm_in']  ?? null);
+        $pm_out = $stamp($v['pm_out'] ?? null);
+
+        // Hours = earliest IN to latest OUT, minus lunch overlap
+        $firstIn = $am_in ?: $pm_in;
+        $lastOut = $pm_out ?: $am_out;
+
+        $hours = 0.0;
+        if ($firstIn && $lastOut && Carbon::parse($lastOut)->gt(Carbon::parse($firstIn))) {
+            $mins = Carbon::parse($lastOut)->diffInMinutes(Carbon::parse($firstIn));
+
+            if ($sched['am_out'] && $sched['pm_in']) {
+                $ls = Carbon::parse("$date {$sched['am_out']}");
+                $le = Carbon::parse("$date {$sched['pm_in']}");
+                $ov = max(0, min(strtotime($lastOut), $le->timestamp) - max(strtotime($firstIn), $ls->timestamp));
+                $mins -= (int) floor($ov/60) * 60; // deduct only whole overlapped minutes
+            }
+
+            $hours = round($mins/60, 2);
+        }
+
+        // Late = (am_in - (sched am_in + grace)) + (pm_in - (sched pm_in + grace)), positive only
+        $late = 0;
+        if ($sched['work']) {
+            if ($am_in && $sched['am_in']) {
+                $schedIn = Carbon::parse("$date {$sched['am_in']}")->addMinutes($grace);
+                $late += max(0, Carbon::parse($am_in)->diffInMinutes($schedIn, false));
+            }
+            if ($pm_in && $sched['pm_in']) {
+                $schedIn = Carbon::parse("$date {$sched['pm_in']}")->addMinutes($grace);
+                $late += max(0, Carbon::parse($pm_in)->diffInMinutes($schedIn, false));
+            }
+        }
+
+        // Undertime = (scheduled pm_out - pm_out) positive only
+        $under = 0;
+        if ($sched['work'] && $pm_out && $sched['pm_out']) {
+            $schedOut = Carbon::parse("$date {$sched['pm_out']}");
+            $under = max(0, $schedOut->diffInMinutes(Carbon::parse($pm_out), false));
+        }
+
+        // Status
+        $hasAny = ($am_in || $am_out || $pm_in || $pm_out);
+        $status = $hasAny ? 'Present' : ($sched['work'] ? 'Absent' : 'No Duty');
+
+        // Upsert attendance_days
+        $payload = [
+            'user_id'            => $userId,
+            'work_date'          => $date,
+            'am_in'              => $am_in,
+            'am_out'             => $am_out,
+            'pm_in'              => $pm_in,
+            'pm_out'             => $pm_out,
+            'late_minutes'       => (int)$late,
+            'undertime_minutes'  => (int)$under,
+            'total_hours'        => (float)$hours,
+            'status'             => $status,
+            'updated_at'         => now(),
+        ];
+
+        $exists = DB::table('attendance_days')
+            ->where('user_id',$userId)->where('work_date',$date)->exists();
+
+        if ($exists) {
+            DB::table('attendance_days')
+              ->where('user_id',$userId)->where('work_date',$date)->update($payload);
+        } else {
+            $payload['created_at'] = now();
+            DB::table('attendance_days')->insert($payload);
+        }
+
+        // Return recomputed values so the UI can reflect them immediately
+        return response()->json([
+            'ok'=>true,
+            'day'=>$payload,
+        ]);
     }
 }

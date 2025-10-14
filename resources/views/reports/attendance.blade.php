@@ -4,11 +4,10 @@
     <h2 class="font-semibold text-xl">Attendance Report</h2>
   </x-slot>
 
-  <div class="py-6 max-w-7xl mx-auto" x-data="{ mode: '{{ request('mode', 'all_active') }}' }">
+  <div class="py-6 max-w-7xl mx-auto" x-data="attendancePage()">
 
     {{-- FILTERS --}}
     <form method="GET" class="bg-white p-4 rounded shadow grid md:grid-cols-12 gap-3 mb-4">
-      {{-- DATE RANGE --}}
       <div class="md:col-span-2">
         <label class="text-xs text-gray-600">From</label>
         <input class="border rounded px-2 py-1 w-full" type="date" name="from" value="{{ request('from') }}">
@@ -18,7 +17,6 @@
         <input class="border rounded px-2 py-1 w-full" type="date" name="to" value="{{ request('to') }}">
       </div>
 
-      {{-- MODE TOGGLE --}}
       <div class="md:col-span-3">
         <label class="text-xs text-gray-600 block mb-1">Mode</label>
         <div class="flex items-center gap-4">
@@ -31,20 +29,16 @@
         </div>
       </div>
 
-      {{-- EMPLOYEE PICKER --}}
       <div class="md:col-span-3" x-show="mode === 'employee'">
         <label class="text-xs text-gray-600">Employee</label>
         <select class="border rounded px-2 py-1 w-full" name="employee_id">
           <option value="">-- Select Employee --</option>
           @foreach($employees as $emp)
-            <option value="{{ $emp->id }}" @selected(request('employee_id') == $emp->id)>
-              {{ $emp->name }} ({{ $emp->department }})
-            </option>
+            <option value="{{ $emp->id }}" @selected(request('employee_id') == $emp->id)>{{ $emp->name }} ({{ $emp->department }})</option>
           @endforeach
         </select>
       </div>
 
-      {{-- OPTIONAL FILTERS --}}
       <div class="md:col-span-2">
         <label class="text-xs text-gray-600">Department</label>
         <input class="border rounded px-2 py-1 w-full" type="text" name="dept" placeholder="Department" value="{{ request('dept') }}">
@@ -59,7 +53,6 @@
         </select>
       </div>
 
-      {{-- SUBMIT --}}
       <div class="md:col-span-2 flex items-end">
         <button class="px-4 py-2 bg-blue-600 text-white rounded w-full">Filter</button>
       </div>
@@ -85,188 +78,106 @@
 
     {{-- SORT HELPERS --}}
     @php
-      $sort = request('sort', 'date');
-      $dir  = request('dir', $sort === 'name' ? 'asc' : 'desc');
+      $sort   = request('sort','date');
+      $dir    = request('dir', $sort === 'name' ? 'asc' : 'desc');
       $toggle = fn($col) => request()->fullUrlWithQuery([
-          'sort' => $col,
-          'dir'  => ($sort === $col && $dir === 'asc') ? 'desc' : 'asc',
+        'sort'=>$col, 'dir'=>($sort===$col && $dir==='asc') ? 'desc' : 'asc',
       ]);
-      $arrow = function($col) use ($sort, $dir) {
-          if ($sort !== $col) return '';
-          return $dir === 'asc' ? '▲' : '▼';
-      };
-    @endphp
-
-    {{-- ========== PAGE-SCOPED LOOKUPS (holidays + working-day flags) ========== --}}
-    @php
-      // Work on either paginator items or direct collection
-      $pageItems = method_exists($rows, 'items') ? collect($rows->items()) : collect($rows);
-
-      // Determine date window on THIS page
-      $dates = $pageItems->pluck('work_date')->filter()->map(fn($d) => \Carbon\Carbon::parse($d)->toDateString());
-      $minDate = $dates->min();
-      $maxDate = $dates->max();
-
-      // Holidays for this page: map Y-m-d => (object)
-      $holidayByDate = collect();
-      if ($minDate && $maxDate) {
-          $holidayByDate = \Illuminate\Support\Facades\DB::table('holiday_calendars as hc')
-              ->join('holiday_dates as hd', 'hd.holiday_calendar_id', '=', 'hc.id')
-              ->where('hc.status', 'active')
-              ->whereBetween('hd.date', [$minDate, $maxDate])
-              ->get(['hd.date','hd.name','hd.is_non_working'])
-              ->keyBy(fn($h) => \Carbon\Carbon::parse($h->date)->toDateString());
-      }
-
-      // Build working-day map from shift_window_days:  $map[shift_window_id][dow] = 0/1
-      $shiftIds = $pageItems->pluck('shift_window_id')->filter()->unique()->values();
-      $shiftDayMap = []; // plain PHP array to avoid "indirect modification" issues
-      if ($shiftIds->isNotEmpty()) {
-          $rowsDays = \Illuminate\Support\Facades\DB::table('shift_window_days')
-              ->whereIn('shift_window_id', $shiftIds)
-              ->get(['shift_window_id','dow','is_working']);
-          foreach ($rowsDays as $r) {
-              $sid = (int)$r->shift_window_id;
-              $dow = (int)$r->dow;           // 0=Sun..6=Sat
-              $isW = (int)$r->is_working;    // 0/1
-              if (!isset($shiftDayMap[$sid])) $shiftDayMap[$sid] = [];
-              $shiftDayMap[$sid][$dow] = $isW;
-          }
-      }
-
-      // Helper: is working day for this shift? default = Sunday off when unknown
-      $isWorkingDay = function (?int $shiftId, \Carbon\Carbon $day) use ($shiftDayMap): bool {
-          $dow = $day->dayOfWeek; // 0..6 (Sun..Sat)
-          if ($shiftId && isset($shiftDayMap[$shiftId]) && array_key_exists($dow, $shiftDayMap[$shiftId])) {
-              return (int)$shiftDayMap[$shiftId][$dow] === 1;
-          }
-          return $dow !== \Carbon\Carbon::SUNDAY;
-      };
+      $arrow = fn($col) => ($sort===$col ? ($dir==='asc'?'▲':'▼') : '');
+      $fmt   = fn($ts)=> $ts ? \Carbon\Carbon::parse($ts)->format('g:i:s A') : '';
     @endphp
 
     {{-- TABLE --}}
     <div class="bg-white rounded shadow overflow-x-auto">
       <style>
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+        .mono { font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
         .nowrap { white-space: nowrap; }
         .chip { display:inline-block; padding:0 .4rem; border-radius:.375rem; font-size:.75rem; line-height:1.25rem }
+        .btn  { padding:.25rem .5rem; border:1px solid #ddd; border-radius:.375rem; background:#fff; }
+        .btn-primary { @apply bg-blue-600 text-white; }
+        .btn[disabled] { opacity:.5; cursor:not-allowed; }
+        .divider { height:1px; background-color:#e5e7eb; }
       </style>
 
-      @php
-        $sumLate = 0; $sumUnder = 0; $sumHours = 0.0;
-      @endphp
+      @php $sumLate=0; $sumUnder=0; $sumHours=0.0; @endphp
 
       <table class="min-w-full text-[13px]">
         <thead class="bg-gray-50">
-        <tr class="text-left">
-          <th class="px-3 py-2">
-            <a href="{{ $toggle('date') }}" class="inline-flex items-center gap-1">
-              Date <span class="text-gray-400">{{ $arrow('date') }}</span>
-            </a>
-          </th>
-          <th class="px-3 py-2">
-            <a href="{{ $toggle('name') }}" class="inline-flex items-center gap-1">
-              Name <span class="text-gray-400">{{ $arrow('name') }}</span>
-            </a>
-          </th>
-          <th class="px-3 py-2">Dept</th>
-          <th class="px-3 py-2">AM In</th>
-          <th class="px-3 py-2">AM Out</th>
-          <th class="px-3 py-2">PM In</th>
-          <th class="px-3 py-2">PM Out</th>
-          <th class="px-3 py-2 text-right">Late (min)</th>
-          <th class="px-3 py-2 text-right">Undertime (min)</th>
-          <th class="px-3 py-2 text-right">Hours</th>
-          <th class="px-3 py-2">Status</th>
-          <th class="px-3 py-2">Remarks</th>
-        </tr>
+          <tr class="text-left">
+            <th class="px-3 py-2">
+              <a href="{{ $toggle('date') }}" class="inline-flex items-center gap-1">Date <span class="text-gray-400">{{ $arrow('date') }}</span></a>
+            </th>
+            <th class="px-3 py-2">
+              <a href="{{ $toggle('name') }}" class="inline-flex items-center gap-1">Name <span class="text-gray-400">{{ $arrow('name') }}</span></a>
+            </th>
+            <th class="px-3 py-2">AM In</th>
+            <th class="px-3 py-2">AM Out</th>
+            <th class="px-3 py-2">PM In</th>
+            <th class="px-3 py-2">PM Out</th>
+            <th class="px-3 py-2 text-right">Late (min)</th>
+            <th class="px-3 py-2 text-right">Undertime (min)</th>
+            <th class="px-3 py-2 text-right">Hours</th>
+            <th class="px-3 py-2">Status</th>
+            <th class="px-3 py-2">Remarks</th>
+            <th class="px-3 py-2">Action</th>
+          </tr>
         </thead>
 
         <tbody>
         @forelse($rows as $r)
           @php
-            $fmt = fn($ts) => $ts ? \Carbon\Carbon::parse($ts)->format('g:i:s A') : '';
-
-            $hAmOut = $r->am_out ? \Carbon\Carbon::parse($r->am_out) : null;
-            $hPmIn  = $r->pm_in  ? \Carbon\Carbon::parse($r->pm_in)  : null;
-            $hPmOut = $r->pm_out ? \Carbon\Carbon::parse($r->pm_out) : null;
-
-            $d      = \Carbon\Carbon::parse($r->work_date);
-            $t1130  = $d->copy()->setTime(11,30,0);
-            $t1259  = $d->copy()->setTime(12,59,59);
-            $t1300  = $d->copy()->setTime(13,0,0);
-            $t1700  = $d->copy()->setTime(17,0,0);
-
-            // Page-level holiday + working-day overrides
-            $hol = $holidayByDate->get($d->toDateString());
-            $isHolidayNonWorking = $hol && (int)$hol->is_non_working === 1;
-            $workingToday = $isWorkingDay((int)($r->shift_window_id ?? null), $d);
-            $hasScans = (bool)($r->am_in || $r->am_out || $r->pm_in || $r->pm_out);
-
-            // Final status to show
-            if (!empty($r->status)) {
-                $statusShow = $r->status;
-            } elseif ($isHolidayNonWorking && !$hasScans) {
-                $statusShow = 'Holiday' . (!empty($hol->name) ? ': '.$hol->name : '');
-            } elseif (!$workingToday && !$hasScans) {
-                $statusShow = 'No Duty';
-            } else {
-                $statusShow = 'Absent';
-            }
-
-            // Remarks (sequence logic hinting)
-            $remarks = [];
-            if (!$hPmIn && !$hPmOut && $hAmOut && $hAmOut->betweenIncluded($t1130, $t1259)) {
-              $remarks[] = 'Morning only';
-            }
-            if ($hPmIn && $hPmIn->gte($t1300)) {
-              $remarks[] = 'Late PM In (≥ 1:00 PM)';
-            }
-            if ($hPmOut && $hPmOut->lt($t1700)) {
-              $remarks[] = 'Undertime PM Out (< 5:00 PM)';
-            }
-
-            // Totals
             $sumLate  += (int)($r->late_minutes ?? 0);
             $sumUnder += (int)($r->undertime_minutes ?? 0);
             $sumHours += (float)($r->total_hours ?? 0);
-          @endphp
 
+            $pmInShow = $r->pm_in;
+            if ($r->pm_in && $r->pm_out && !$r->am_out) {
+              if (\Carbon\Carbon::parse($r->pm_in)->equalTo(\Carbon\Carbon::parse($r->pm_out))) {
+                $pmInShow = null;
+              }
+            }
+
+            $st = (string)($r->status ?? 'Present');
+            $bg = 'bg-gray-200 text-gray-800';
+            if(str_contains($st,'Late') && str_contains($st,'Under')) $bg='bg-amber-200 text-amber-900';
+            elseif($st==='Present') $bg='bg-emerald-200 text-emerald-900';
+            elseif(str_starts_with($st,'Holiday')) $bg='bg-sky-200 text-sky-900';
+            elseif($st==='No Duty') $bg='bg-slate-200 text-slate-800';
+            elseif($st==='Absent')  $bg='bg-rose-200 text-rose-900';
+            elseif(str_contains($st,'Late')) $bg='bg-yellow-200 text-yellow-900';
+            elseif(str_contains($st,'Under')) $bg='bg-orange-200 text-orange-900';
+
+            $preset = [
+              'am_in'  => $r->am_in  ? \Carbon\Carbon::parse($r->am_in)->format('H:i:s')  : null,
+              'am_out' => $r->am_out ? \Carbon\Carbon::parse($r->am_out)->format('H:i:s') : null,
+              'pm_in'  => $pmInShow  ? \Carbon\Carbon::parse($pmInShow)->format('H:i:s') : null,
+              'pm_out' => $r->pm_out ? \Carbon\Carbon::parse($r->pm_out)->format('H:i:s') : null,
+            ];
+          @endphp
           <tr class="border-t">
             <td class="px-3 py-2">{{ $r->work_date }}</td>
             <td class="px-3 py-2">{{ $r->name }}</td>
-            <td class="px-3 py-2">{{ $r->department }}</td>
-
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->am_in) }}</td>
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->am_out) }}</td>
-            <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_in) }}</td>
+            <td class="px-3 py-2 mono nowrap">{{ $fmt($pmInShow) }}</td>
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_out) }}</td>
-
             <td class="px-3 py-2 text-right">{{ $r->late_minutes ?? 0 }}</td>
             <td class="px-3 py-2 text-right">{{ $r->undertime_minutes ?? 0 }}</td>
             <td class="px-3 py-2 text-right">{{ number_format((float)($r->total_hours ?? 0),2) }}</td>
-
+            <td class="px-3 py-2"><span class="chip {{ $bg }}">{{ $st }}</span></td>
+            <td class="px-3 py-2"></td>
             <td class="px-3 py-2">
-              @php
-                $st = (string)$statusShow;
-                $bg = 'bg-gray-200 text-gray-800';
-                if(str_contains($st,'Late') && str_contains($st,'Under')) $bg='bg-amber-200 text-amber-900';
-                elseif($st==='Present') $bg='bg-emerald-200 text-emerald-900';
-                elseif(str_starts_with($st,'Holiday')) $bg='bg-sky-200 text-sky-900';
-                elseif($st==='No Duty') $bg='bg-slate-200 text-slate-800';
-                elseif($st==='Absent')  $bg='bg-rose-200 text-rose-900';
-                elseif(str_contains($st,'Late')) $bg='bg-yellow-200 text-yellow-900';
-                elseif(str_contains($st,'Under')) $bg='bg-orange-200 text-orange-900';
-              @endphp
-              <span class="chip {{ $bg }}">{{ $st }}</span>
-            </td>
-
-            <td class="px-3 py-2">
-              @if($remarks)
-                @foreach($remarks as $rem)
-                  <span class="chip bg-indigo-100 text-indigo-800 mr-1">{{ $rem }}</span>
-                @endforeach
-              @endif
+              <button
+                type="button"
+                class="btn"
+                x-on:click="openFromEvent($event)"
+                data-user="{{ (int) $r->user_id }}"
+                data-date="{{ $r->work_date }}"
+                data-name="{{ e($r->name) }}"
+                data-preset='@json($preset)'
+              >
+                View / Edit Logs
+              </button>
             </td>
           </tr>
         @empty
@@ -278,27 +189,247 @@
         @endforelse
         </tbody>
 
-        {{-- PAGE SUBTOTALS --}}
         @if((method_exists($rows,'count') ? $rows->count() : count($rows)))
           <tfoot class="bg-gray-50">
             <tr class="font-semibold border-t">
-              <td colspan="7" class="px-3 py-2 text-right">Page totals:</td>
+              <td colspan="6" class="px-3 py-2 text-right">Page totals:</td>
               <td class="px-3 py-2 text-right">{{ $sumLate }}</td>
               <td class="px-3 py-2 text-right">{{ $sumUnder }}</td>
               <td class="px-3 py-2 text-right">{{ number_format($sumHours,2) }}</td>
-              <td colspan="2"></td>
+              <td colspan="3"></td>
             </tr>
           </tfoot>
         @endif
       </table>
     </div>
 
-    <div class="mt-3">{{ method_exists($rows,'withQueryString') ? $rows->withQueryString()->links() : '' }}</div>
+    <div class="mt-3">
+      {{ method_exists($rows,'withQueryString') ? $rows->withQueryString()->links() : '' }}
+    </div>
 
-    <p class="text-xs text-gray-500 mt-2">
-      Display assumes <em>sequence</em> consolidation logic (AM-out only from 11:30–12:59, PM-in ≥ 11:45 preferred, late if ≥ 1:00 PM, PM-out last scan; undertime if PM-out &lt; 5:00 PM).
-    </p>
+    {{-- MODAL: Edit consolidated + Raw Logs --}}
+    <div x-show="modalOpen" style="display:none" class="fixed inset-0 bg-black/40 z-50">
+      <div class="bg-white rounded shadow max-w-4xl mx-auto mt-16 p-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold">
+            <span x-text="modalName"></span>
+            — <span x-text="modalDate"></span>
+          </h3>
+          <button class="px-2 py-1" @click="modalOpen=false">✕</button>
+        </div>
+
+        {{-- EDIT CONSOLIDATED --}}
+        <div class="mt-4">
+          <h4 class="font-semibold mb-2">Edit Consolidated</h4>
+          <form @submit.prevent="saveDay">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label class="text-xs text-gray-600">AM In</label>
+                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.am_in">
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">AM Out</label>
+                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.am_out">
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">PM In</label>
+                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.pm_in">
+              </div>
+              <div>
+                <label class="text-xs text-gray-600">PM Out</label>
+                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.pm_out">
+              </div>
+            </div>
+
+            <div class="mt-3 flex items-center gap-2">
+              <button class="px-3 py-2 bg-blue-600 text-white rounded" :disabled="saving">
+                <span x-show="!saving">Save</span>
+                <span x-show="saving">Saving…</span>
+              </button>
+              <span class="text-sm" x-text="saveMsg"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="divider my-4"></div>
+
+        {{-- RAW LOGS --}}
+        <div>
+          <h4 class="font-semibold mb-2">Raw Logs (12-hour)</h4>
+
+          <div class="border rounded max-h-64 overflow-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 sticky top-0">
+                <tr>
+                  <th class="p-2 text-left w-16">#</th>
+                  <th class="p-2 text-left">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-if="modalRows.length === 0">
+                  <tr><td class="p-2 text-center text-gray-500" colspan="2">No logs.</td></tr>
+                </template>
+                <template x-for="(row,idx) in modalRows" :key="row.id ?? 'new'+idx">
+                  <tr class="border-t">
+                    <td class="p-2" x-text="(meta.per_page*(meta.current_page-1))+idx+1"></td>
+                    <td class="p-2" x-text="formatTime12(row.punched_at)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-3 flex items-center justify-between">
+            <div>
+              <span x-text="`Showing ${modalRows.length} of ${meta.total} (page ${meta.current_page}/${meta.last_page})`"></span>
+            </div>
+            <div class="space-x-2">
+              <button class="btn" :disabled="!meta.prev" @click="goto(meta.prev)">Prev</button>
+              <button class="btn" :disabled="!meta.next" @click="goto(meta.next)">Next</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
   </div>
 
   <script src="https://unpkg.com/alpinejs" defer></script>
+  <script>
+    function attendancePage() {
+      return {
+        mode: '{{ request('mode','all_active') }}',
+
+        modalOpen: false,
+        modalLoading: false,
+        modalDate: null,
+        modalUser: null,
+        modalName: '',
+        modalRows: [],
+        meta: { current_page:1, last_page:1, per_page:25, total:0, next:null, prev:null },
+
+        // edit state
+        edit: { am_in: null, am_out: null, pm_in: null, pm_out: null },
+        saving: false,
+        saveMsg: '',
+
+        // SAFER opener (no inline JSON)
+        openFromEvent(evt) {
+          const el = evt.currentTarget;
+          const userId  = parseInt(el.dataset.user, 10);
+          const workDate= el.dataset.date || '';
+          const name    = el.dataset.name || '';
+          let preset = {};
+          try { preset = JSON.parse(el.dataset.preset || '{}'); } catch (_) {}
+
+          this.openLogs(userId, workDate, name, preset);
+        },
+
+        openLogs(userId, workDate, name, preset = {}) {
+          this.modalUser  = userId;
+          this.modalDate  = workDate;
+          this.modalName  = name || '';
+          this.modalOpen  = true;
+          this.saveMsg = '';
+
+          // 1) Load consolidated day (prefill edit fields)
+          const dayUrl = `{{ route('reports.attendance.day') }}?user_id=${userId}&date=${workDate}`;
+          fetch(dayUrl, { headers: { 'Accept':'application/json' } })
+            .then(r => r.json())
+            .then(d => {
+              const day = d.day || {};
+              // Convert possible "YYYY-MM-DD HH:mm:ss" to "HH:mm:ss" for input[type=time]
+              this.edit.am_in  = this.onlyTime(day.am_in)  ?? (preset.am_in  || null);
+              this.edit.am_out = this.onlyTime(day.am_out) ?? (preset.am_out || null);
+              this.edit.pm_in  = this.onlyTime(day.pm_in)  ?? (preset.pm_in  || null);
+              this.edit.pm_out = this.onlyTime(day.pm_out) ?? (preset.pm_out || null);
+            })
+            .catch(() => {
+              // fall back to preset if API fails
+              this.edit.am_in  = preset.am_in  || null;
+              this.edit.am_out = preset.am_out || null;
+              this.edit.pm_in  = preset.pm_in  || null;
+              this.edit.pm_out = preset.pm_out || null;
+            });
+
+          // 2) Load raw logs
+          this.fetchPage(`{{ route('reports.attendance.raw') }}?user_id=${userId}&date=${workDate}`);
+        },
+
+        fetchPage(url) {
+          this.modalLoading = true;
+          fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(r => r.json())
+            .then(d => {
+              this.modalRows = d.rows || [];
+              this.meta = d.meta || this.meta;
+            })
+            .catch(() => { this.modalRows = []; })
+            .finally(() => { this.modalLoading = false; });
+        },
+
+        goto(url) {
+          if (!url) return;
+          this.fetchPage(url);
+        },
+
+        // Save consolidated day (HH:mm:ss → server)
+        saveDay() {
+          this.saving = true;
+          this.saveMsg = '';
+          const body = new URLSearchParams({
+            user_id: this.modalUser,
+            date: this.modalDate,
+            am_in:  this.edit.am_in  || '',
+            am_out: this.edit.am_out || '',
+            pm_in:  this.edit.pm_in  || '',
+            pm_out: this.edit.pm_out || '',
+            _token: '{{ csrf_token() }}',
+          });
+
+          fetch(`{{ route('reports.attendance.day.update') }}`, {
+            method: 'POST',
+            headers: { 'Accept':'application/json', 'Content-Type':'application/x-www-form-urlencoded' },
+            body
+          })
+          .then(async (r) => {
+            if (!r.ok) throw new Error(await r.text());
+            return r.json();
+          })
+          .then(() => {
+            this.saveMsg = 'Saved.';
+          })
+          .catch(() => { this.saveMsg = 'Save failed.'; })
+          .finally(() => { this.saving = false; });
+        },
+
+        // Helpers
+        onlyTime(ts) {
+          if (!ts) return null;
+          // Accepts "YYYY-MM-DD HH:mm:ss" or "HH:mm:ss"
+          const s = ts.replace('T',' ');
+          if (s.includes(' ')) return s.split(' ')[1];
+          // If just HH:mm or HH:mm:ss, return as-is (ensure seconds)
+          if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) {
+            return s.length === 5 ? s + ':00' : s;
+          }
+          return null;
+        },
+
+        formatTime12(ts) {
+          // For raw logs display in 12-hour
+          if (!ts) return '';
+          const s = ts.replace('T',' ');
+          const time = (s.includes(' ') ? s.split(' ')[1] : s);
+          // time "HH:mm:ss"
+          const [H,M,S='00'] = time.split(':');
+          let h = parseInt(H,10);
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          h = h % 12; if (h === 0) h = 12;
+          return `${h}:${M}:${S} ${ampm}`;
+        }
+      }
+    }
+  </script>
 </x-app-layout>
