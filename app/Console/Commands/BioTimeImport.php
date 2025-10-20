@@ -12,7 +12,7 @@ class BioTimeImport extends Command
     protected $signature = 'biotime:import
         {--days=2 : If no from/to, import last N days}
         {--from= : YYYY-MM-DD}
-        {--to=   : YYYY-MM-DD}
+        {--to= : YYYY-MM-DD}
         {--summary : Print imported rows}
         {--dry : Don’t write to DB (preview)}';
 
@@ -28,63 +28,101 @@ class BioTimeImport extends Command
             ? Carbon::parse($this->option('to'))->endOfDay()
             : now()->endOfDay();
 
-        $summary = (bool)$this->option('summary');
-        $dry     = (bool)$this->option('dry');
+        $summary = (bool) $this->option('summary');
+        $dry     = (bool) $this->option('dry');
 
         $this->info("BioTime import window: {$from} → {$to}");
 
-        $has = fn(string $c) => Schema::hasColumn('attendance_raw', $c);
+        $has = fn (string $c) => Schema::hasColumn('attendance_raw', $c);
 
-        // Maps for linking
-        $bySchoolId = DB::table('users')->whereNotNull('school_id')->pluck('id','school_id')->toArray();     // primary
-        $byZkId     = DB::table('users')->whereNotNull('zkteco_user_id')->pluck('id','zkteco_user_id')->toArray(); // fallback
+        // ---------- Build lookup maps ----------
+        $users = DB::table('users')->select('id', 'school_id', 'zkteco_user_id')->get();
+
+        // Primary: map ZKTeco user code
+        $byZkCode = $users
+            ->whereNotNull('zkteco_user_id')
+            ->mapWithKeys(function ($u) {
+                $k = trim((string) $u->zkteco_user_id);
+                return $k === '' ? [] : [$k => (int) $u->id];
+            })
+            ->toArray();
+
+        // Fallback: map school_id (some orgs use this as device PIN/code)
+        $bySchoolId = $users
+            ->whereNotNull('school_id')
+            ->mapWithKeys(function ($u) {
+                $k = trim((string) $u->school_id);
+                return $k === '' ? [] : [$k => (int) $u->id];
+            })
+            ->toArray();
 
         $imported = 0;
 
         DB::connection('biotime')
             ->table('iclock_transaction')
             ->select([
-                'id',
-                'emp_id',
-                'emp_code',
+                'id',           // required by chunkById
+                'emp_id',       // BioTime internal user id
+                'emp_code',     // device-visible code/PIN (what we see as ZKTeco user code)
                 'punch_time',
                 'punch_state',
                 'verify_type',
                 'terminal_sn',
             ])
             ->whereBetween('punch_time', [$from, $to])
-            ->orderBy('punch_time')
-            ->chunkById(1000, function ($rows) use ($summary, $dry, $has, $bySchoolId, $byZkId, &$imported) {
+            ->orderBy('id') // chunkById requires deterministic order by primary key
+            ->chunkById(1000, function ($rows) use ($summary, $dry, $has, $byZkCode, $bySchoolId, &$imported) {
 
                 foreach ($rows as $r) {
-                    if (empty($r->punch_time)) continue;
+                    if (empty($r->punch_time)) {
+                        continue;
+                    }
+
+                    // Normalize
+                    $code = isset($r->emp_code) ? trim((string) $r->emp_code) : null; // e.g., "17"
+                    $eid  = isset($r->emp_id)   ? trim((string) $r->emp_id)   : null; // e.g., "148"
+                    // If you ever face leading-zero mismatches (e.g., "017" vs "17"), uncomment:
+                    // $code = $code !== null ? ltrim($code, '0') : null;
 
                     $ts = Carbon::parse($r->punch_time);
 
-                    // ✅ device_user_id = emp_code (so it matches users.school_id)
-                    $deviceUserId = (string)$r->emp_code;
+                    // Keep device_user_id as what the device reports (best for de-dupe/uniqueness)
+                    $deviceUserId = $code ?: $eid ?: null;
 
-                    // Link to users: prefer school_id==emp_code; fallback to zkteco_user_id==emp_id
+                    // --------- Link order ----------
+                    // 1) emp_code -> users.zkteco_user_id
+                    // 2) emp_code -> users.school_id
+                    // 3) emp_id   -> users.zkteco_user_id (rare; last resort)
                     $userId = null;
-                    if (!empty($r->emp_code) && isset($bySchoolId[$r->emp_code])) {
-                        $userId = (int)$bySchoolId[$r->emp_code];
-                    } elseif (!is_null($r->emp_id) && isset($byZkId[(string)$r->emp_id])) {
-                        $userId = (int)$byZkId[(string)$r->emp_id];
+                    if ($code && isset($byZkCode[$code])) {
+                        $userId = $byZkCode[$code];
+                        $linkHow = 'zk_by_code';
+                    } elseif ($code && isset($bySchoolId[$code])) {
+                        $userId = $bySchoolId[$code];
+                        $linkHow = 'school_by_code';
+                    } elseif ($eid && isset($byZkCode[$eid])) {
+                        $userId = $byZkCode[$eid];
+                        $linkHow = 'zk_by_empid';
+                    } else {
+                        $linkHow = 'unlinked';
                     }
 
                     if ($summary) {
                         $this->line(sprintf(
                             'emp_code=%-10s emp_id=%-6s %s %s',
-                            (string)$r->emp_code,
-                            (string)$r->emp_id,
+                            (string) $r->emp_code,
+                            (string) $r->emp_id,
                             $ts->toDateTimeString(),
-                            $userId ? "→ user_id={$userId}" : '(unlinked)'
+                            $userId ? "→ user_id={$userId} ({$linkHow})" : '(unlinked)'
                         ));
                     }
 
-                    if ($dry) { $imported++; continue; }
+                    if ($dry) {
+                        $imported++;
+                        continue;
+                    }
 
-                    // Build row with only existing columns
+                    // Build row constrained to existing columns
                     $row = [
                         'device_user_id' => $deviceUserId,
                         'punched_at'     => $ts,
@@ -96,16 +134,23 @@ class BioTimeImport extends Command
                     if ($has('state'))      $row['state']      = $r->punch_state ?? null;
                     if ($has('punch_type')) $row['punch_type'] = $r->verify_type ?? null;
                     if ($has('source'))     $row['source']     = 'biotime';
-                    if ($has('payload'))    $row['payload']    = json_encode([
-                        'emp_code'    => $r->emp_code,
-                        'emp_id'      => $r->emp_id,
-                        'punch_state' => $r->punch_state,
-                        'verify_type' => $r->verify_type,
-                        'terminal_sn' => $r->terminal_sn,
-                    ], JSON_UNESCAPED_UNICODE);
+                    if ($has('payload')) {
+                        $row['payload'] = json_encode([
+                            'emp_code'    => $r->emp_code,
+                            'emp_id'      => $r->emp_id,
+                            'punch_state' => $r->punch_state,
+                            'verify_type' => $r->verify_type,
+                            'terminal_sn' => $r->terminal_sn,
+                            'link'        => $linkHow,
+                        ], JSON_UNESCAPED_UNICODE);
+                    }
 
+                    // Natural de-dupe key: device_user_id + punched_at
                     DB::table('attendance_raw')->updateOrInsert(
-                        ['device_user_id' => $deviceUserId, 'punched_at' => $ts],
+                        [
+                            'device_user_id' => $deviceUserId,
+                            'punched_at'     => $ts,
+                        ],
                         $row
                     );
 
@@ -113,8 +158,7 @@ class BioTimeImport extends Command
                 }
             });
 
-        $this->info(($dry ? '[DRY] ' : '')."Imported {$imported} punch(es).");
+        $this->info(($dry ? '[DRY] ' : '') . "Imported {$imported} punch(es).");
         return self::SUCCESS;
     }
 }
- 
