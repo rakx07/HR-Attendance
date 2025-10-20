@@ -19,7 +19,7 @@ class AttendanceConsolidate extends Command
 
     protected $description = 'Consolidate attendance_raw punches into attendance_days for reporting';
 
-    /** Cache per shift_window_id */
+    /** Cached shift data per shift_window_id */
     private array $shiftCache = [];
 
     public function handle(): int
@@ -27,19 +27,20 @@ class AttendanceConsolidate extends Command
         $tz = config('app.timezone', 'UTC');
 
         $since = $this->option('since')
-            ? CarbonImmutable::parse($this->option('since'), $tz)
+            ? CarbonImmutable::parse((string)$this->option('since'), $tz)
             : CarbonImmutable::now($tz)->subDays((int)($this->option('days') ?: 30))->startOfDay();
 
         $until = $this->option('until')
-            ? CarbonImmutable::parse($this->option('until'), $tz)->endOfDay()
+            ? CarbonImmutable::parse((string)$this->option('until'), $tz)->endOfDay()
             : CarbonImmutable::now($tz)->endOfDay();
 
         $strict = (bool)$this->option('strict');
-        $mode   = strtolower((string)$this->option('mode') ?: 'windows');
+        $mode   = strtolower((string)($this->option('mode') ?: 'windows'));
         if (!in_array($mode, ['windows', 'sequence'], true)) $mode = 'windows';
 
         $this->info("Consolidating from {$since} to {$until} (strict=".($strict?'yes':'no').", mode={$mode}) ...");
 
+        // Pull raw punches + user shift
         $rows = DB::table('attendance_raw as ar')
             ->join('users as u', 'u.id', '=', 'ar.user_id')
             ->whereBetween('ar.punched_at', [$since->toDateTimeString(), $until->toDateTimeString()])
@@ -79,52 +80,53 @@ class AttendanceConsolidate extends Command
                 if ($punches->isEmpty()) continue;
 
                 $windowId = $bucket['shift_window_id'] ?? null;
+
+                // Resolve schedule anchors + classification windows
                 [
                     $amInSched, $amOutSched, $pmInSched, $pmOutSched, $grace,
                     $amInWinS, $amInWinE, $amOutWinS, $amOutWinE, $pmInWinS, $pmInWinE, $pmOutWinS, $pmOutWinE,
                 ] = $this->resolveShiftWindowWithWindows($windowId, $workDate, $tz);
 
-                // Sanity for windows mode: clamp AM windows to before pmInWinS
+                // Ensure AM windows end before PM windows start
                 $amCutoff = $pmInWinS->copy()->subSecond();
                 if ($amInWinE->gte($amCutoff))  $amInWinE  = $amCutoff->copy();
                 if ($amOutWinE->gte($amCutoff)) $amOutWinE = $amCutoff->copy();
 
-                // ---- CLASSIFICATION ----
+                // ---- CLASSIFY PUNCHES ----
                 $amIn = $amOut = $pmIn = $pmOut = null;
 
                 if ($mode === 'sequence') {
-                    // Hard windows per your rules
-                    $amInEnd    = Carbon::parse("$workDate 11:29:59", $tz); // AM period end
-                    $amOutWinS  = Carbon::parse("$workDate 11:30:00", $tz);
-                    $amOutWinE  = Carbon::parse("$workDate 12:59:59", $tz);
-                    $pmInPrefS  = Carbon::parse("$workDate 11:45:00", $tz); // preferred PM-in window
+                    // Fixed “sequence” cuts: AM ≤ 11:29, AM-OUT 11:30–12:59, PM-IN ≥ 11:45 (prefer) or ≥13:00, PM-OUT = last
+                    $amInEnd    = Carbon::parse("$workDate 11:29:59", $tz);
+                    $amOutWinS2 = Carbon::parse("$workDate 11:30:00", $tz);
+                    $amOutWinE2 = Carbon::parse("$workDate 12:59:59", $tz);
+                    $pmInPrefS  = Carbon::parse("$workDate 11:45:00", $tz);
                     $pmInPrefE  = Carbon::parse("$workDate 12:59:59", $tz);
-                    $onePM      = Carbon::parse("$workDate 13:00:00", $tz); // ≥ 1:00 PM is late PM-in
-                    $pmOutMin   = Carbon::parse("$workDate 17:00:00", $tz); // earliest OK PM-out
+                    $onePM      = Carbon::parse("$workDate 13:00:00", $tz);
+                    $pmOutMin   = Carbon::parse("$workDate 17:00:00", $tz);
 
-                    // 1) AM IN: first scan ≤ 11:29:59 (extra scans before 11:30 are ignored)
+                    // AM IN: first scan ≤ 11:29:59
                     foreach ($punches as $p) {
                         if ($p->lte($amInEnd)) { $amIn = $p; break; }
-                        if ($p->gte($pmInPrefS)) break; // first punch already PM-ish → no AM
+                        if ($p->gte($pmInPrefS)) break; // next scans are PM-ish
                     }
 
-                    // 2) AM OUT: first scan in 11:30–12:59 strictly after AM-in (if any)
+                    // AM OUT: first scan in 11:30–12:59 strictly after AM-in
                     foreach ($punches as $p) {
                         if ($amIn && $p->lte($amIn)) continue;
-                        if ($p->gte($amOutWinS) && $p->lte($amOutWinE)) { $amOut = $p; break; }
+                        if ($p->gte($amOutWinS2) && $p->lte($amOutWinE2)) { $amOut = $p; break; }
                     }
 
-                    // 3) PM IN: prefer 11:45–12:59, else first scan ≥ 1:00 PM (late)
+                    // PM IN: prefer 11:45–12:59; else first ≥ 13:00
                     foreach ($punches as $p) {
                         if ($amOut && $p->lte($amOut)) continue;
                         if ($amIn  && !$amOut && $p->lte($amIn)) continue;
 
                         if ($p->gte($pmInPrefS) && $p->lte($pmInPrefE)) { $pmIn = $p; break; }
-                        if ($p->gte($onePM)) { $pmIn = $p; break; } // late PM-in
+                        if ($p->gte($onePM)) { $pmIn = $p; break; }
                     }
 
-                    // 4) PM OUT: always LAST scan of the day (if any).
-                    //    If no pmIn and last scan is AM (~11:30), it's morning-only.
+                    // PM OUT: last of the day; if no pmIn, allow a lone ≥ 5pm as pmOut
                     $last = null;
                     foreach ($punches as $p) { $last = $p; }
                     if ($last) {
@@ -132,19 +134,19 @@ class AttendanceConsolidate extends Command
                             $pmOut = $last;
                         } else {
                             if ($last->gte($pmOutMin)) {
-                                // Rare case: no pmIn but a lone ≥5pm scan → treat as pmOut
                                 $pmOut = $last;
                             }
                         }
                     }
                 } else {
-                    // WINDOWS MODE (unchanged)
+                    // WINDOWS MODE: find punches inside configured windows
                     $amIn  = $this->pickFirstInWindow($punches, $amInWinS,  $amInWinE,  null);
                     $amOut = $this->pickFirstInWindow($punches, $amOutWinS, $amOutWinE, $amIn);
                     $pmIn  = $this->pickFirstInWindow($punches, $pmInWinS,  $pmInWinE,  $amOut ?? $amIn)
                            ?: $this->pickFirstOnOrAfter($punches, $pmInWinS, $amOut ?? $amIn);
                     $pmOut = $this->pickLastOfDay($punches, $workDate, $tz, $pmIn ?? $amOut ?? $amIn);
 
+                    // 2-punch day pattern
                     if ($punches->count() === 2 && !$pmOut) {
                         $amIn  = $punches->first();
                         $pmOut = $punches->last();
@@ -152,11 +154,16 @@ class AttendanceConsolidate extends Command
                     }
                 }
 
-                // Defensive: prevent negative intervals
+                // Defensive ordering
                 if ($amOut && $amIn && $amOut->lt($amIn)) $amOut = null;
                 if ($pmOut && $pmIn && $pmOut->lt($pmIn)) $pmOut = null;
 
-                // STRICT: require all 4
+                // Device quirk: pm_in mirrored to pm_out when am_out missing
+                if ($pmIn && $pmOut && !$amOut && $pmIn->equalTo($pmOut)) {
+                    $pmIn = null;
+                }
+
+                // STRICT mode: require all four punches
                 if ($strict) {
                     $have = collect([$amIn,$amOut,$pmIn,$pmOut])->filter()->count();
                     if ($have < 4) {
@@ -166,7 +173,7 @@ class AttendanceConsolidate extends Command
                     }
                 }
 
-                // Metrics
+                // Compute metrics (non-negative + grace-aware)
                 [$late,$undertime,$hours,$status] = $this->computeMetrics(
                     $amIn,$amOut,$pmIn,$pmOut,
                     $amInSched,$amOutSched,$pmInSched,$pmOutSched,
@@ -204,12 +211,8 @@ class AttendanceConsolidate extends Command
     }
 
     /**
-     * Build schedule + classification windows for the day.
-     * Fallback when columns are missing:
-     *   AM-IN : 07:30–11:29
-     *   AM-OUT: 11:30–12:59
-     *   PM-IN : 13:00–16:59  (set DB pm_in_start to 11:45 if you want earlier)
-     *   PM-OUT: 17:00–23:59
+     * Build schedule anchors + classification windows for a specific date.
+     * Anchors drive metrics (late/under/hours). Windows drive punch picking.
      */
     private function resolveShiftWindowWithWindows($windowId, string $workDate, string $tz): array
     {
@@ -222,7 +225,7 @@ class AttendanceConsolidate extends Command
         $pmInSched  = Carbon::parse("$workDate {$swPmIn}",  $tz);
         $pmOutSched = Carbon::parse("$workDate {$swPmOut}", $tz);
 
-        // Windows
+        // Windows for classification
         $amInWinS   = Carbon::parse("$workDate {$win['am_in_start']}",   $tz);
         $amInWinE   = Carbon::parse("$workDate {$win['am_in_end']}",     $tz);
         $amOutWinS  = Carbon::parse("$workDate {$win['am_out_start']}",  $tz);
@@ -243,12 +246,13 @@ class AttendanceConsolidate extends Command
         ];
     }
 
-    /** Resolve scheduled anchor times (schema tolerant). */
+    /** Resolve scheduled anchor times (supports many schemas). */
     private function resolveShiftAnchors($windowId): array
     {
         $defaults = ['08:00:00','12:00:00','13:00:00','17:00:00',0];
         if (!$windowId) return $defaults;
-        if (array_key_exists($windowId, $this->shiftCache) && isset($this->shiftCache[$windowId]['_anchors'])) {
+
+        if (isset($this->shiftCache[$windowId]['_anchors'])) {
             return $this->shiftCache[$windowId]['_anchors'];
         }
 
@@ -270,7 +274,7 @@ class AttendanceConsolidate extends Command
         ];
     }
 
-    /** Resolve classification windows (schema tolerant). */
+    /** Resolve classification windows (supports many schemas). */
     private function resolveClassificationWindows($windowId): array
     {
         $fallback = [
@@ -279,9 +283,9 @@ class AttendanceConsolidate extends Command
             'pm_in_start'   => '13:00:00', 'pm_in_end'   => '16:59:59',
             'pm_out_start'  => '17:00:00', 'pm_out_end'  => '23:59:59',
         ];
-
         if (!$windowId) return $fallback;
-        if (array_key_exists($windowId, $this->shiftCache) && isset($this->shiftCache[$windowId]['_windows'])) {
+
+        if (isset($this->shiftCache[$windowId]['_windows'])) {
             return $this->shiftCache[$windowId]['_windows'];
         }
 
@@ -392,53 +396,68 @@ class AttendanceConsolidate extends Command
         return $last;
     }
 
+    /**
+     * Metrics aligned to your report logic:
+     * - Late: actual_in > (scheduled_in + grace) for AM & PM
+     * - Undertime: pm_out < scheduled pm_out
+     * - Hours: AM-block + PM-block; or 2-punch fallback (AM-in..PM-out minus scheduled lunch)
+     * Always returns non-negative values.
+     */
     private function computeMetrics(
         ?Carbon $amIn, ?Carbon $amOut, ?Carbon $pmIn, ?Carbon $pmOut,
         Carbon $amInSched, Carbon $amOutSched, Carbon $pmInSched, Carbon $pmOutSched,
         int $graceMinutes
     ): array {
-        // Lateness
+        // LATE
         $late = 0;
 
-        // AM grace (e.g., 07:35 if sched 07:30 + 5)
         if ($amIn) {
-            $amLateRef = $amInSched->copy()->addMinutes($graceMinutes);
-            if ($amIn->gt($amLateRef)) {
-                $late += $amIn->diffInMinutes($amLateRef);
+            $amRef = $amInSched->copy()->addMinutes($graceMinutes);
+            if ($amIn->gt($amRef)) {
+                $late += $amRef->diffInMinutes($amIn); // unsigned
             }
         }
 
-        // PM-in late: any pmIn > 13:00:00 (no grace)
-        if ($pmIn && $pmIn->gt($pmInSched)) {
-            $late += $pmIn->diffInMinutes($pmInSched);
+        if ($pmIn) {
+            $pmRef = $pmInSched->copy()->addMinutes($graceMinutes);
+            if ($pmIn->gt($pmRef)) {
+                $late += $pmRef->diffInMinutes($pmIn); // unsigned
+            }
         }
 
-        // Undertime: PM-out < 17:00:00
+        // UNDERTIME
         $undertime = 0;
         if ($pmOut && $pmOut->lt($pmOutSched)) {
-            $undertime = $pmOutSched->diffInMinutes($pmOut);
+            $undertime = $pmOut->diffInMinutes($pmOutSched); // unsigned
         }
 
-        // Total worked minutes
-        $total = 0;
+        // HOURS
+        $workedMin = 0;
+
         if ($amIn && $amOut && $amOut->gt($amIn)) {
-            $total += $amIn->diffInMinutes($amOut);
+            $workedMin += $amIn->diffInMinutes($amOut);
         }
+
         if ($pmIn && $pmOut && $pmOut->gt($pmIn)) {
-            $total += $pmIn->diffInMinutes($pmOut);
+            $workedMin += $pmIn->diffInMinutes($pmOut);
         }
 
-        // 2-punch fallback: AM-in + PM-out (no AM-out/PM-in) → subtract scheduled lunch
+        // 2-punch fallback: AM-in + PM-out only → subtract scheduled lunch
         if ($amIn && !$amOut && !$pmIn && $pmOut && $pmOut->gt($amIn)) {
+            $gross = $amIn->diffInMinutes($pmOut);
             $lunch = max(0, $amOutSched->diffInMinutes($pmInSched)); // e.g., 90 mins
-            $total = max($total, $amIn->diffInMinutes($pmOut) - $lunch);
+            $workedMin = max($workedMin, max(0, $gross - $lunch));
         }
 
-        $hours = round($total / 60, 2);
+        // Clamp to non-negative
+        $late      = max(0, (int) round($late));
+        $undertime = max(0, (int) round($undertime));
+        $hours     = max(0.0, round($workedMin / 60, 2));
 
-        // Status
+        // STATUS
         $status = 'Present';
-        if (!$amIn && !$amOut && !$pmIn && !$pmOut) {
+        $hasAny = ($amIn || $amOut || $pmIn || $pmOut);
+        if (!$hasAny) {
             $status = 'Absent';
         } elseif ($late > 0 && $undertime > 0) {
             $status = 'Late/Undertime';
@@ -452,7 +471,7 @@ class AttendanceConsolidate extends Command
     }
 }
 
-// (Legacy macro kept for compatibility)
+// Compatibility macro (only if not defined elsewhere)
 if (!method_exists(Carbon::class, 'betweenIncluded')) {
     Carbon::macro('betweenIncluded', function (Carbon $from, Carbon $to): bool {
         /** @var Carbon $self */
