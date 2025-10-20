@@ -129,17 +129,23 @@
           if (!$rec) return 0.0;
           $date = $rec->work_date;
 
-          $start = $rec->am_in ? \Carbon\Carbon::parse($rec->am_in) : ($rec->pm_in ? \Carbon\Carbon::parse($rec->pm_in) : null);
-          $end   = $rec->pm_out ? \Carbon\Carbon::parse($rec->pm_out) : ($rec->am_out ? \Carbon\Carbon::parse($rec->am_out) : null);
+          $start = $rec->am_in ? \Carbon\Carbon::parse($rec->am_in)
+                               : ($rec->pm_in ? \Carbon\Carbon::parse($rec->pm_in) : null);
+          $end   = $rec->pm_out ? \Carbon\Carbon::parse($rec->pm_out)
+                                : ($rec->am_out ? \Carbon\Carbon::parse($rec->am_out) : null);
           if (!$start || !$end || $end->lessThanOrEqualTo($start)) return 0.0;
 
           $mins = $end->diffInMinutes($start);
+
+          // Subtract overlap with lunch break window if defined in schedule
           if ($daySched && $daySched['am_out'] && $daySched['pm_in']) {
               $ls = \Carbon\Carbon::parse("$date {$daySched['am_out']}");
               $le = \Carbon\Carbon::parse("$date {$daySched['pm_in']}");
               $ov = max(0, min($end->timestamp, $le->timestamp) - max($start->timestamp, $ls->timestamp));
               $mins -= (int) floor($ov/60) * 60;
           }
+
+          // Return as hours rounded to 2 decimals
           return round($mins/60, 2);
       };
 
@@ -230,9 +236,14 @@
 
             $late  = (isset($r->late_minutes)      && $r->late_minutes      > 0) ? (int)$r->late_minutes
                     : $calcLate($r,$dSched,$grace);
-            $under = (isset($r->undertime_minutes) && $r->undertime_minutes > 0) ? (int)$r->undertime_minutes
-                    : $calcUnder($r,$dSched);
-            $hours = (isset($r->total_hours)       && $r->total_hours       > 0) ? (float)$r->total_hours
+            $under = (isset($r->undertime_minutes) && $r->undertime_minutes > 0)
+        ? round((float)$r->undertime_minutes, 2)
+        : round($calcUnder($r, $dSched), 2);
+
+
+            // ↓ Ensure 2dp for both stored and computed hours
+            $hours = (isset($r->total_hours) && $r->total_hours > 0)
+                    ? round((float)$r->total_hours, 2)
                     : $computeHours($r,$dSched);
 
             $sumLate  += (int)$late;
@@ -248,8 +259,9 @@
             <td class="px-3 py-2 mono nowrap">{{ $fmt($pmInShow) }}</td>
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_out) }}</td>
             <td class="px-3 py-2 text-right">{{ $late }}</td>
-            <td class="px-3 py-2 text-right">{{ $under }}</td>
-            <td class="px-3 py-2 text-right">{{ number_format($hours,2) }}</td>
+            <td class="px-3 py-2 text-right">{{ number_format($under, 2) }}</td>
+
+            <td class="px-3 py-2 text-right">{{ number_format($hours, 2) }}</td>
             <td class="px-3 py-2"><span class="chip {{ $bg }}">{{ $st }}</span></td>
             <td class="px-3 py-2"></td>
             <td class="px-3 py-2">
@@ -274,7 +286,7 @@
               <td colspan="6" class="px-3 py-2 text-right">Page totals:</td>
               <td class="px-3 py-2 text-right">{{ $sumLate }}</td>
               <td class="px-3 py-2 text-right">{{ $sumUnder }}</td>
-              <td class="px-3 py-2 text-right">{{ number_format($sumHours,2) }}</td>
+              <td class="px-3 py-2 text-right">{{ number_format($sumHours, 2) }}</td>
               <td colspan="3"></td>
             </tr>
           </tfoot>

@@ -358,127 +358,195 @@ class ReportController extends Controller
      * Save consolidated AM/PM times and RECOMPUTE late / undertime / hours.
      * This is what keeps the table + PDF aligned with edits from the modal.
      */
-    public function dayUpdate(Request $r): JsonResponse
-    {
-        $v = $r->validate([
-            'user_id' => ['required','integer'],
-            'date'    => ['required','date_format:Y-m-d'],
-            'am_in'   => ['nullable','date_format:H:i:s'],
-            'am_out'  => ['nullable','date_format:H:i:s'],
-            'pm_in'   => ['nullable','date_format:H:i:s'],
-            'pm_out'  => ['nullable','date_format:H:i:s'],
-        ]);
+    public function dayUpdate(Request $r): \Illuminate\Http\JsonResponse
+        {
+            $v = $r->validate([
+                'user_id' => ['required','integer'],
+                'date'    => ['required','date_format:Y-m-d'],
+                'am_in'   => ['nullable','date_format:H:i:s'],
+                'am_out'  => ['nullable','date_format:H:i:s'],
+                'pm_in'   => ['nullable','date_format:H:i:s'],
+                'pm_out'  => ['nullable','date_format:H:i:s'],
+                'remarks' => ['nullable','string','max:1000'],
+            ]);
 
-        $userId = (int)$v['user_id'];
-        $date   = $v['date'];
+            $userId  = (int)$v['user_id'];
+            $date    = $v['date'];
+            $remarks = $v['remarks'] ?? null;
 
-        // Pull shift + grace + per-day schedule
-        $user = DB::table('users')->select('shift_window_id')->where('id',$userId)->first();
-        $shiftId = (int)($user->shift_window_id ?? 0);
-        $grace   = (int)DB::table('shift_windows')->where('id',$shiftId)->value('grace_minutes');
+            // Pull shift + grace + schedule
+            $user    = DB::table('users')->select('shift_window_id')->where('id',$userId)->first();
+            $shiftId = (int)($user->shift_window_id ?? 0);
+            $grace   = (int)DB::table('shift_windows')->where('id',$shiftId)->value('grace_minutes');
 
-        $dow0 = Carbon::parse($date)->dayOfWeek; // 0..6 Sun..Sat
-        // In DB, many store dow as 1..7 (Mon..Sun). Support both.
-        $rowDay = DB::table('shift_window_days')
-            ->where('shift_window_id',$shiftId)
-            ->where(function($w) use($dow0){
-                $w->where('dow', $dow0 === 0 ? 7 : $dow0) // 1..7 Mon..Sun
-                  ->orWhere('dow', $dow0);               // 0..6 Sun..Sat (fallback)
-            })
-            ->first();
+            $dow0 = \Carbon\Carbon::parse($date)->dayOfWeek;
+            $rowDay = DB::table('shift_window_days')
+                ->where('shift_window_id',$shiftId)
+                ->where(function($w) use($dow0){
+                    $w->where('dow', $dow0 === \Carbon\Carbon::SUNDAY ? 7 : $dow0)
+                    ->orWhere('dow', $dow0);
+                })
+                ->first();
 
-        $isWorking = $rowDay
-            ? (int)($rowDay->is_working ?? 1)
-            : ($dow0===Carbon::SUNDAY ? 0 : 1);
+            $isWorking = $rowDay ? (int)($rowDay->is_working ?? 1) : ($dow0===\Carbon\Carbon::SUNDAY ? 0 : 1);
+            $sched = [
+                'work'  => $isWorking,
+                'am_in' => $rowDay->am_in ?? null,
+                'am_out'=> $rowDay->am_out ?? null,
+                'pm_in' => $rowDay->pm_in ?? null,
+                'pm_out'=> $rowDay->pm_out ?? null,
+            ];
 
-        $sched = [
-            'work'  => $isWorking,
-            'am_in' => $rowDay->am_in ?? null,
-            'am_out'=> $rowDay->am_out ?? null,
-            'pm_in' => $rowDay->pm_in ?? null,
-            'pm_out'=> $rowDay->pm_out ?? null,
-        ];
+            // Build full timestamps from date + time
+            $stamp = fn($t) => $t ? "{$date} {$t}" : null;
+            $am_in  = $stamp($v['am_in']  ?? null);
+            $am_out = $stamp($v['am_out'] ?? null);
+            $pm_in  = $stamp($v['pm_in']  ?? null);
+            $pm_out = $stamp($v['pm_out'] ?? null);
 
-        // Build full timestamps from date + time (if provided)
-        $stamp = fn($t) => $t ? "{$date} {$t}" : null;
+            // Hours = earliest IN → latest OUT minus lunch overlap (in minutes)
+            $firstIn = $am_in ?: $pm_in;
+            $lastOut = $pm_out ?: $am_out;
 
-        $am_in  = $stamp($v['am_in']  ?? null);
-        $am_out = $stamp($v['am_out'] ?? null);
-        $pm_in  = $stamp($v['pm_in']  ?? null);
-        $pm_out = $stamp($v['pm_out'] ?? null);
+            $hours = 0.0;
+            if ($firstIn && $lastOut && \Carbon\Carbon::parse($lastOut)->gt(\Carbon\Carbon::parse($firstIn))) {
+                $mins = \Carbon\Carbon::parse($lastOut)->diffInMinutes(\Carbon\Carbon::parse($firstIn));
 
-        // Hours = earliest IN to latest OUT, minus lunch overlap
-        $firstIn = $am_in ?: $pm_in;
-        $lastOut = $pm_out ?: $am_out;
+                if ($sched['am_out'] && $sched['pm_in']) {
+                    $ls = \Carbon\Carbon::parse("$date {$sched['am_out']}");
+                    $le = \Carbon\Carbon::parse("$date {$sched['pm_in']}");
+                    $ovSec = max(0, min(strtotime($lastOut), $le->timestamp) - max(strtotime($firstIn), $ls->timestamp));
+                    $ovMin = (int) floor($ovSec / 60);
+                    $mins  = max(0, $mins - $ovMin);
+                }
 
-        $hours = 0.0;
-        if ($firstIn && $lastOut && Carbon::parse($lastOut)->gt(Carbon::parse($firstIn))) {
-            $mins = Carbon::parse($lastOut)->diffInMinutes(Carbon::parse($firstIn));
-
-            if ($sched['am_out'] && $sched['pm_in']) {
-                $ls = Carbon::parse("$date {$sched['am_out']}");
-                $le = Carbon::parse("$date {$sched['pm_in']}");
-                $ov = max(0, min(strtotime($lastOut), $le->timestamp) - max(strtotime($firstIn), $ls->timestamp));
-                $mins -= (int) floor($ov/60) * 60; // deduct only whole overlapped minutes
+                $hours = max(0, round($mins/60, 2));
             }
 
-            $hours = round($mins/60, 2);
-        }
-
-        // Late = (am_in - (sched am_in + grace)) + (pm_in - (sched pm_in + grace)), positive only
-        $late = 0;
-        if ($sched['work']) {
-            if ($am_in && $sched['am_in']) {
-                $schedIn = Carbon::parse("$date {$sched['am_in']}")->addMinutes($grace);
-                $late += max(0, Carbon::parse($am_in)->diffInMinutes($schedIn, false));
+            // Late / Undertime
+            $late = 0;
+            if ($sched['work']) {
+                if ($am_in && $sched['am_in']) {
+                    $schedIn = \Carbon\Carbon::parse("$date {$sched['am_in']}")->addMinutes($grace);
+                    $late += max(0, \Carbon\Carbon::parse($am_in)->diffInMinutes($schedIn, false));
+                }
+                if ($pm_in && $sched['pm_in']) {
+                    $schedIn = \Carbon\Carbon::parse("$date {$sched['pm_in']}")->addMinutes($grace);
+                    $late += max(0, \Carbon\Carbon::parse($pm_in)->diffInMinutes($schedIn, false));
+                }
             }
-            if ($pm_in && $sched['pm_in']) {
-                $schedIn = Carbon::parse("$date {$sched['pm_in']}")->addMinutes($grace);
-                $late += max(0, Carbon::parse($pm_in)->diffInMinutes($schedIn, false));
+
+            $under = 0;
+            if ($sched['work'] && $pm_out && $sched['pm_out']) {
+                $schedOut = \Carbon\Carbon::parse("$date {$sched['pm_out']}");
+                $under = max(0, $schedOut->diffInMinutes(\Carbon\Carbon::parse($pm_out), false));
             }
+
+            // Status
+            $hasAny = ($am_in || $am_out || $pm_in || $pm_out);
+            $status = $hasAny ? 'Present' : ($sched['work'] ? 'Absent' : 'No Duty');
+
+            // Upsert attendance_days
+            $payload = [
+                'user_id'            => $userId,
+                'work_date'          => $date,
+                'am_in'              => $am_in,
+                'am_out'             => $am_out,
+                'pm_in'              => $pm_in,
+                'pm_out'             => $pm_out,
+                'late_minutes'       => (int)$late,
+                'undertime_minutes'  => (int)$under,
+                'total_hours'        => (float)$hours,
+                'status'             => $status,
+                'updated_at'         => now(),
+            ];
+
+            $exists = DB::table('attendance_days')->where('user_id',$userId)->where('work_date',$date)->exists();
+            if ($exists) {
+                DB::table('attendance_days')->where('user_id',$userId)->where('work_date',$date)->update($payload);
+            } else {
+                $payload['created_at'] = now();
+                DB::table('attendance_days')->insert($payload);
+            }
+
+            // ---- AUDIT: attendance_corrections (one row per user/date) ----
+            $audit = [
+                'am_in'     => $v['am_in']  ?? null,
+                'am_out'    => $v['am_out'] ?? null,
+                'pm_in'     => $v['pm_in']  ?? null,
+                'pm_out'    => $v['pm_out'] ?? null,
+                'remarks'   => $remarks,
+                'edited_by' => auth()->id(),
+                'updated_at'=> now(),
+            ];
+
+            $hasAudit = DB::table('attendance_corrections')->where('user_id',$userId)->where('work_date',$date)->exists();
+            if ($hasAudit) {
+                DB::table('attendance_corrections')
+                    ->where('user_id',$userId)->where('work_date',$date)
+                    ->update($audit);
+            } else {
+                DB::table('attendance_corrections')->insert(array_merge($audit, [
+                    'user_id'   => $userId,
+                    'work_date' => $date,
+                    'created_at'=> now(),
+                ]));
+            }
+
+            return response()->json(['ok'=>true, 'day'=>$payload]);
         }
 
-        // Undertime = (scheduled pm_out - pm_out) positive only
-        $under = 0;
-        if ($sched['work'] && $pm_out && $sched['pm_out']) {
-            $schedOut = Carbon::parse("$date {$sched['pm_out']}");
-            $under = max(0, $schedOut->diffInMinutes(Carbon::parse($pm_out), false));
-        }
 
-        // Status
-        $hasAny = ($am_in || $am_out || $pm_in || $pm_out);
-        $status = $hasAny ? 'Present' : ($sched['work'] ? 'Absent' : 'No Duty');
+    public function summary(Request $r)
+{
+    // Employees dropdown (active by default)
+    $employees = DB::table('users')
+        ->select(
+            'id',
+            DB::raw("TRIM(CONCAT(last_name, ', ', first_name, ' ', COALESCE(middle_name, ''))) AS name"),
+            'department'
+        )
+        ->where('active', 1)
+        ->orderBy('name')
+        ->get();
 
-        // Upsert attendance_days
-        $payload = [
-            'user_id'            => $userId,
-            'work_date'          => $date,
-            'am_in'              => $am_in,
-            'am_out'             => $am_out,
-            'pm_in'              => $pm_in,
-            'pm_out'             => $pm_out,
-            'late_minutes'       => (int)$late,
-            'undertime_minutes'  => (int)$under,
-            'total_hours'        => (float)$hours,
-            'status'             => $status,
-            'updated_at'         => now(),
-        ];
+    // Sorting (reuse same style as index)
+    $sort = $r->input('sort', 'date');
+    $defaultDir = $sort === 'name' ? 'asc' : 'desc';
+    $dir  = strtolower($r->input('dir', $defaultDir));
+    $dir  = in_array($dir, ['asc','desc']) ? $dir : $defaultDir;
 
-        $exists = DB::table('attendance_days')
-            ->where('user_id',$userId)->where('work_date',$date)->exists();
+    // Query (reuse your baseQuery + applySort)
+    $q = $this->baseQuery($r);
+    $q = $this->applySort($q, $sort, $dir);
 
-        if ($exists) {
-            DB::table('attendance_days')
-              ->where('user_id',$userId)->where('work_date',$date)->update($payload);
-        } else {
-            $payload['created_at'] = now();
-            DB::table('attendance_days')->insert($payload);
-        }
+    $rows = $q->paginate(25)->withQueryString();
 
-        // Return recomputed values so the UI can reflect them immediately
-        return response()->json([
-            'ok'=>true,
-            'day'=>$payload,
-        ]);
-    }
+    return view('reports.attendancereportsummary', [
+        'rows'      => $rows,
+        'employees' => $employees,
+    ]);
+}
+
+/** Optional: dedicated PDF for the Summary page (reuses your pdf logic) */
+public function summaryPdf(Request $r)
+{
+    // Reuse your existing pdf() logic but a different view/filename if you like
+    $sort = $r->input('sort', 'date');
+    $defaultDir = $sort === 'name' ? 'asc' : 'desc';
+    $dir  = strtolower($r->input('dir', $defaultDir));
+    $dir  = in_array($dir, ['asc','desc']) ? $dir : $defaultDir;
+
+    $q = $this->baseQuery($r);
+    $q = $this->applySort($q, $sort, $dir);
+    $rows = $q->get();
+
+    $pdf = Pdf::loadView('reports.attendance_summary_pdf', [
+        'rows'    => $rows,
+        'filters' => $r->all(),
+    ])->setPaper('letter', 'portrait');
+
+    return $pdf->stream('attendance_summary_' . now()->format('Ymd_His') . '.pdf');
+}
+
 }

@@ -18,20 +18,29 @@
 
     {{-- Reports: GIA Staff + HR + Admins --}}
     @can('reports.view.org')
-    <div>
-      <div class="px-3 text-gray-500 uppercase text-xs mb-1">Reports</div>
-      <a href="{{ route('reports.attendance') }}"
-         class="block px-3 py-2 rounded {{ request()->routeIs('reports.attendance') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
-        Attendance Report
-      </a>
-      @can('reports.export')
+  <div>
+    <div class="px-3 text-gray-500 uppercase text-xs mb-1">Reports</div>
+
+    {{-- Attendance Report (detailed) --}}
+    <a href="{{ route('reports.attendance') }}"
+       class="block px-3 py-2 rounded {{ request()->routeIs('reports.attendance') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Attendance Report
+    </a>
+
+    {{-- Attendance Report Summary (fix/check page) --}}
+    <a href="{{ route('reports.attendance.summary') }}"
+       class="block px-3 py-2 rounded {{ request()->routeIs('reports.attendance.summary') ? 'bg-gray-100 font-medium' : 'hover:bg-gray-50' }}">
+      Attendance Report Summary
+    </a>
+
+    @can('reports.export')
       <a href="{{ route('reports.attendance', request()->query()) }}"
          class="block px-3 py-2 rounded hover:bg-gray-50">
         Download (Excel)
       </a>
-      @endcan
-    </div>
     @endcan
+  </div>
+@endcan
 
     {{-- HR Officer modules --}}
   @role('HR Officer|Administrator|IT Admin')

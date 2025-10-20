@@ -8,6 +8,7 @@ use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AttendanceEditorController;
 use App\Http\Controllers\DepartmentController;
 use App\Http\Controllers\HolidayController;
+use App\Http\Controllers\AttendanceReportSummaryController; // ← added
 
 /*
 |--------------------------------------------------------------------------
@@ -118,6 +119,20 @@ Route::middleware(['auth','role:HR Officer|IT Admin|Administrator'])->group(func
     Route::patch ('/holidays/{calendar}/dates/{date}',         [HolidayController::class,'updateDate'])->name('holidays.dates.update');
     Route::delete('/holidays/{calendar}/dates/{date}',         [HolidayController::class,'destroyDate'])->name('holidays.dates.destroy');
 });
+
+/* -------------------- Attendance Report Summary (NEW) -------------------- */
+Route::middleware(['auth','permission:reports.view.org'])->group(function () {
+    Route::get('/reports/attendance/summary',      [AttendanceReportSummaryController::class, 'index'])->name('reports.attendance.summary');
+    Route::get('/reports/attendance/summary/raw',  [AttendanceReportSummaryController::class, 'raw'])->name('reports.attendance.summary.raw');
+    Route::get('/reports/attendance/summary/pdf',  [AttendanceReportSummaryController::class, 'pdf'])->name('reports.attendance.summary.pdf');
+});
+
+Route::middleware(['auth','permission:attendance.edit'])->post(
+    '/reports/attendance/summary/save',
+    [AttendanceReportSummaryController::class, 'save']
+)->name('reports.attendance.summary.save');
+
+/* ------------------------------------------------------------------------ */
 
 // Breeze/Fortify/Jetstream auth routes
 require __DIR__.'/auth.php';
