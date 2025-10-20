@@ -87,6 +87,86 @@
       $fmt   = fn($ts)=> $ts ? \Carbon\Carbon::parse($ts)->format('g:i:s A') : '';
     @endphp
 
+    {{-- ===== Page-scoped schedule + grace (compute late/under/hours on the fly) ===== --}}
+    @php
+      // Items on this page (paginator or collection)
+      $pageItems = method_exists($rows, 'items') ? collect($rows->items()) : collect($rows);
+
+      // Shift IDs present
+      $shiftIds = $pageItems->pluck('shift_window_id')->filter()->unique()->values();
+
+      // Grace per shift
+      $graceByShift = [];
+      if ($shiftIds->isNotEmpty()) {
+          $grows = DB::table('shift_windows')
+              ->whereIn('id', $shiftIds)
+              ->pluck('grace_minutes', 'id');
+          foreach ($grows as $sid => $g) $graceByShift[(int)$sid] = (int)$g;
+      }
+
+      // Per-day schedule (DB: dow 1..7 → 0..6)
+      $sched = [];
+      if ($shiftIds->isNotEmpty()) {
+          $drows = DB::table('shift_window_days')
+              ->whereIn('shift_window_id', $shiftIds)
+              ->get(['shift_window_id','dow','is_working','am_in','am_out','pm_in','pm_out']);
+          foreach ($drows as $d) {
+              $sid   = (int)$d->shift_window_id;
+              $dowDb = (int)$d->dow;       // 1..7 (Mon..Sun)
+              $dow0  = $dowDb % 7;         // 0..6 (Sun..Sat)
+              $isWork= isset($d->is_working) ? (int)$d->is_working
+                                             : ((is_null($d->am_in) && is_null($d->pm_in)) ? 0 : 1);
+              $sched[$sid][$dow0] = [
+                  'work'=>$isWork,
+                  'am_in'=>$d->am_in, 'am_out'=>$d->am_out,
+                  'pm_in'=>$d->pm_in, 'pm_out'=>$d->pm_out,
+              ];
+          }
+      }
+
+      // Helpers (same rules as PDF)
+      $computeHours = function($rec,$daySched){
+          if (!$rec) return 0.0;
+          $date = $rec->work_date;
+
+          $start = $rec->am_in ? \Carbon\Carbon::parse($rec->am_in) : ($rec->pm_in ? \Carbon\Carbon::parse($rec->pm_in) : null);
+          $end   = $rec->pm_out ? \Carbon\Carbon::parse($rec->pm_out) : ($rec->am_out ? \Carbon\Carbon::parse($rec->am_out) : null);
+          if (!$start || !$end || $end->lessThanOrEqualTo($start)) return 0.0;
+
+          $mins = $end->diffInMinutes($start);
+          if ($daySched && $daySched['am_out'] && $daySched['pm_in']) {
+              $ls = \Carbon\Carbon::parse("$date {$daySched['am_out']}");
+              $le = \Carbon\Carbon::parse("$date {$daySched['pm_in']}");
+              $ov = max(0, min($end->timestamp, $le->timestamp) - max($start->timestamp, $ls->timestamp));
+              $mins -= (int) floor($ov/60) * 60;
+          }
+          return round($mins/60, 2);
+      };
+
+      $calcLate = function($rec,$daySched,$graceMin){
+          if (!$rec || !$daySched || (int)($daySched['work']??1)===0) return 0;
+          $date = $rec->work_date; $late = 0;
+          if ($rec->am_in && $daySched['am_in']) {
+            $schedIn = \Carbon\Carbon::parse("$date {$daySched['am_in']}")->addMinutes($graceMin);
+            $late += max(0, \Carbon\Carbon::parse($rec->am_in)->diffInMinutes($schedIn, false));
+          }
+          if ($rec->pm_in && $daySched['pm_in']) {
+            $schedIn = \Carbon\Carbon::parse("$date {$daySched['pm_in']}")->addMinutes($graceMin);
+            $late += max(0, \Carbon\Carbon::parse($rec->pm_in)->diffInMinutes($schedIn, false));
+          }
+          return (int)$late;
+      };
+
+      $calcUnder = function($rec,$daySched){
+          if (!$rec || !$daySched || (int)($daySched['work']??1)===0) return 0;
+          $date = $rec->work_date;
+          if ($rec->pm_out && $daySched['pm_out']) {
+            return max(0, \Carbon\Carbon::parse("$date {$daySched['pm_out']}")->diffInMinutes(\Carbon\Carbon::parse($rec->pm_out), false));
+          }
+          return 0;
+      };
+    @endphp
+
     {{-- TABLE --}}
     <div class="bg-white rounded shadow overflow-x-auto">
       <style>
@@ -94,9 +174,6 @@
         .nowrap { white-space: nowrap; }
         .chip { display:inline-block; padding:0 .4rem; border-radius:.375rem; font-size:.75rem; line-height:1.25rem }
         .btn  { padding:.25rem .5rem; border:1px solid #ddd; border-radius:.375rem; background:#fff; }
-        .btn-primary { @apply bg-blue-600 text-white; }
-        .btn[disabled] { opacity:.5; cursor:not-allowed; }
-        .divider { height:1px; background-color:#e5e7eb; }
       </style>
 
       @php $sumLate=0; $sumUnder=0; $sumHours=0.0; @endphp
@@ -126,10 +203,7 @@
         <tbody>
         @forelse($rows as $r)
           @php
-            $sumLate  += (int)($r->late_minutes ?? 0);
-            $sumUnder += (int)($r->undertime_minutes ?? 0);
-            $sumHours += (float)($r->total_hours ?? 0);
-
+            // PM-In duplication guard
             $pmInShow = $r->pm_in;
             if ($r->pm_in && $r->pm_out && !$r->am_out) {
               if (\Carbon\Carbon::parse($r->pm_in)->equalTo(\Carbon\Carbon::parse($r->pm_out))) {
@@ -137,6 +211,7 @@
               }
             }
 
+            // Status chip color
             $st = (string)($r->status ?? 'Present');
             $bg = 'bg-gray-200 text-gray-800';
             if(str_contains($st,'Late') && str_contains($st,'Under')) $bg='bg-amber-200 text-amber-900';
@@ -147,13 +222,24 @@
             elseif(str_contains($st,'Late')) $bg='bg-yellow-200 text-yellow-900';
             elseif(str_contains($st,'Under')) $bg='bg-orange-200 text-orange-900';
 
-            $preset = [
-              'am_in'  => $r->am_in  ? \Carbon\Carbon::parse($r->am_in)->format('H:i:s')  : null,
-              'am_out' => $r->am_out ? \Carbon\Carbon::parse($r->am_out)->format('H:i:s') : null,
-              'pm_in'  => $pmInShow  ? \Carbon\Carbon::parse($pmInShow)->format('H:i:s') : null,
-              'pm_out' => $r->pm_out ? \Carbon\Carbon::parse($r->pm_out)->format('H:i:s') : null,
-            ];
+            // Compute Late/Under/Hours (prefer stored > 0, else compute)
+            $sid   = (int)($r->shift_window_id ?? 0);
+            $dow0  = \Carbon\Carbon::parse($r->work_date)->dayOfWeek; // 0..6
+            $dSched= $sched[$sid][$dow0] ?? ['work'=>($dow0===\Carbon\Carbon::SUNDAY?0:1),'am_in'=>null,'am_out'=>null,'pm_in'=>null,'pm_out'=>null];
+            $grace = $graceByShift[$sid] ?? 0;
+
+            $late  = (isset($r->late_minutes)      && $r->late_minutes      > 0) ? (int)$r->late_minutes
+                    : $calcLate($r,$dSched,$grace);
+            $under = (isset($r->undertime_minutes) && $r->undertime_minutes > 0) ? (int)$r->undertime_minutes
+                    : $calcUnder($r,$dSched);
+            $hours = (isset($r->total_hours)       && $r->total_hours       > 0) ? (float)$r->total_hours
+                    : $computeHours($r,$dSched);
+
+            $sumLate  += (int)$late;
+            $sumUnder += (int)$under;
+            $sumHours += (float)$hours;
           @endphp
+
           <tr class="border-t">
             <td class="px-3 py-2">{{ $r->work_date }}</td>
             <td class="px-3 py-2">{{ $r->name }}</td>
@@ -161,21 +247,14 @@
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->am_out) }}</td>
             <td class="px-3 py-2 mono nowrap">{{ $fmt($pmInShow) }}</td>
             <td class="px-3 py-2 mono nowrap">{{ $fmt($r->pm_out) }}</td>
-            <td class="px-3 py-2 text-right">{{ $r->late_minutes ?? 0 }}</td>
-            <td class="px-3 py-2 text-right">{{ $r->undertime_minutes ?? 0 }}</td>
-            <td class="px-3 py-2 text-right">{{ number_format((float)($r->total_hours ?? 0),2) }}</td>
+            <td class="px-3 py-2 text-right">{{ $late }}</td>
+            <td class="px-3 py-2 text-right">{{ $under }}</td>
+            <td class="px-3 py-2 text-right">{{ number_format($hours,2) }}</td>
             <td class="px-3 py-2"><span class="chip {{ $bg }}">{{ $st }}</span></td>
             <td class="px-3 py-2"></td>
             <td class="px-3 py-2">
-              <button
-                type="button"
-                class="btn"
-                x-on:click="openFromEvent($event)"
-                data-user="{{ (int) $r->user_id }}"
-                data-date="{{ $r->work_date }}"
-                data-name="{{ e($r->name) }}"
-                data-preset='@json($preset)'
-              >
+              <button type="button" class="btn"
+                @click="openLogs({{ $r->user_id }}, '{{ $r->work_date }}', '{{ addslashes($r->name) }}')">
                 View / Edit Logs
               </button>
             </td>
@@ -207,77 +286,44 @@
       {{ method_exists($rows,'withQueryString') ? $rows->withQueryString()->links() : '' }}
     </div>
 
-    {{-- MODAL: Edit consolidated + Raw Logs --}}
+    {{-- MODAL: Raw Logs (simple list) --}}
     <div x-show="modalOpen" style="display:none" class="fixed inset-0 bg-black/40 z-50">
-      <div class="bg-white rounded shadow max-w-4xl mx-auto mt-16 p-4">
+      <div class="bg-white rounded shadow max-w-3xl mx-auto mt-16 p-4">
         <div class="flex items-center justify-between">
           <h3 class="text-lg font-semibold">
-            <span x-text="modalName"></span>
-            — <span x-text="modalDate"></span>
+            Raw Logs — <span x-text="modalDate"></span> — <span x-text="modalName"></span>
           </h3>
           <button class="px-2 py-1" @click="modalOpen=false">✕</button>
         </div>
 
-        {{-- EDIT CONSOLIDATED --}}
-        <div class="mt-4">
-          <h4 class="font-semibold mb-2">Edit Consolidated</h4>
-          <form @submit.prevent="saveDay">
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div>
-                <label class="text-xs text-gray-600">AM In</label>
-                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.am_in">
-              </div>
-              <div>
-                <label class="text-xs text-gray-600">AM Out</label>
-                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.am_out">
-              </div>
-              <div>
-                <label class="text-xs text-gray-600">PM In</label>
-                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.pm_in">
-              </div>
-              <div>
-                <label class="text-xs text-gray-600">PM Out</label>
-                <input type="time" step="1" class="border rounded px-2 py-1 w-full" x-model="edit.pm_out">
-              </div>
-            </div>
+        <div class="mt-3" x-show="modalLoading">Loading…</div>
 
-            <div class="mt-3 flex items-center gap-2">
-              <button class="px-3 py-2 bg-blue-600 text-white rounded" :disabled="saving">
-                <span x-show="!saving">Save</span>
-                <span x-show="saving">Saving…</span>
-              </button>
-              <span class="text-sm" x-text="saveMsg"></span>
-            </div>
-          </form>
-        </div>
-
-        <div class="divider my-4"></div>
-
-        {{-- RAW LOGS --}}
-        <div>
-          <h4 class="font-semibold mb-2">Raw Logs (12-hour)</h4>
-
-          <div class="border rounded max-h-64 overflow-auto">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50 sticky top-0">
+        <div class="mt-3" x-show="!modalLoading">
+          <table class="w-full text-sm border">
+            <thead class="bg-gray-50">
+              <tr>
+                <th class="p-2 text-left">#</th>
+                <th class="p-2 text-left">Time</th>
+                <th class="p-2 text-left">Type</th>
+                <th class="p-2 text-left">Source</th>
+                <th class="p-2 text-left">Device</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-if="modalRows.length === 0">
+                <tr><td class="p-2 text-center text-gray-500" colspan="5">No logs.</td></tr>
+              </template>
+              <template x-for="(row,idx) in modalRows" :key="row.id ?? 'new'+idx">
                 <tr>
-                  <th class="p-2 text-left w-16">#</th>
-                  <th class="p-2 text-left">Time</th>
+                  <td class="p-2" x-text="(meta.per_page*(meta.current_page-1))+idx+1"></td>
+                  <td class="p-2" x-text="formatTime(row.punched_at)"></td>
+                  <td class="p-2" x-text="row.punch_type ?? ''"></td>
+                  <td class="p-2" x-text="row.source ?? ''"></td>
+                  <td class="p-2" x-text="row.device_sn ?? ''"></td>
                 </tr>
-              </thead>
-              <tbody>
-                <template x-if="modalRows.length === 0">
-                  <tr><td class="p-2 text-center text-gray-500" colspan="2">No logs.</td></tr>
-                </template>
-                <template x-for="(row,idx) in modalRows" :key="row.id ?? 'new'+idx">
-                  <tr class="border-t">
-                    <td class="p-2" x-text="(meta.per_page*(meta.current_page-1))+idx+1"></td>
-                    <td class="p-2" x-text="formatTime12(row.punched_at)"></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
+              </template>
+            </tbody>
+          </table>
 
           <div class="mt-3 flex items-center justify-between">
             <div>
@@ -289,7 +335,6 @@
             </div>
           </div>
         </div>
-
       </div>
     </div>
 
@@ -300,7 +345,6 @@
     function attendancePage() {
       return {
         mode: '{{ request('mode','all_active') }}',
-
         modalOpen: false,
         modalLoading: false,
         modalDate: null,
@@ -309,51 +353,11 @@
         modalRows: [],
         meta: { current_page:1, last_page:1, per_page:25, total:0, next:null, prev:null },
 
-        // edit state
-        edit: { am_in: null, am_out: null, pm_in: null, pm_out: null },
-        saving: false,
-        saveMsg: '',
-
-        // SAFER opener (no inline JSON)
-        openFromEvent(evt) {
-          const el = evt.currentTarget;
-          const userId  = parseInt(el.dataset.user, 10);
-          const workDate= el.dataset.date || '';
-          const name    = el.dataset.name || '';
-          let preset = {};
-          try { preset = JSON.parse(el.dataset.preset || '{}'); } catch (_) {}
-
-          this.openLogs(userId, workDate, name, preset);
-        },
-
-        openLogs(userId, workDate, name, preset = {}) {
+        openLogs(userId, workDate, name) {
           this.modalUser  = userId;
           this.modalDate  = workDate;
           this.modalName  = name || '';
           this.modalOpen  = true;
-          this.saveMsg = '';
-
-          // 1) Load consolidated day (prefill edit fields)
-          const dayUrl = `{{ route('reports.attendance.day') }}?user_id=${userId}&date=${workDate}`;
-          fetch(dayUrl, { headers: { 'Accept':'application/json' } })
-            .then(r => r.json())
-            .then(d => {
-              const day = d.day || {};
-              // Convert possible "YYYY-MM-DD HH:mm:ss" to "HH:mm:ss" for input[type=time]
-              this.edit.am_in  = this.onlyTime(day.am_in)  ?? (preset.am_in  || null);
-              this.edit.am_out = this.onlyTime(day.am_out) ?? (preset.am_out || null);
-              this.edit.pm_in  = this.onlyTime(day.pm_in)  ?? (preset.pm_in  || null);
-              this.edit.pm_out = this.onlyTime(day.pm_out) ?? (preset.pm_out || null);
-            })
-            .catch(() => {
-              // fall back to preset if API fails
-              this.edit.am_in  = preset.am_in  || null;
-              this.edit.am_out = preset.am_out || null;
-              this.edit.pm_in  = preset.pm_in  || null;
-              this.edit.pm_out = preset.pm_out || null;
-            });
-
-          // 2) Load raw logs
           this.fetchPage(`{{ route('reports.attendance.raw') }}?user_id=${userId}&date=${workDate}`);
         },
 
@@ -363,7 +367,7 @@
             .then(r => r.json())
             .then(d => {
               this.modalRows = d.rows || [];
-              this.meta = d.meta || this.meta;
+              this.meta      = d.meta || this.meta;
             })
             .catch(() => { this.modalRows = []; })
             .finally(() => { this.modalLoading = false; });
@@ -374,60 +378,13 @@
           this.fetchPage(url);
         },
 
-        // Save consolidated day (HH:mm:ss → server)
-        saveDay() {
-          this.saving = true;
-          this.saveMsg = '';
-          const body = new URLSearchParams({
-            user_id: this.modalUser,
-            date: this.modalDate,
-            am_in:  this.edit.am_in  || '',
-            am_out: this.edit.am_out || '',
-            pm_in:  this.edit.pm_in  || '',
-            pm_out: this.edit.pm_out || '',
-            _token: '{{ csrf_token() }}',
-          });
-
-          fetch(`{{ route('reports.attendance.day.update') }}`, {
-            method: 'POST',
-            headers: { 'Accept':'application/json', 'Content-Type':'application/x-www-form-urlencoded' },
-            body
-          })
-          .then(async (r) => {
-            if (!r.ok) throw new Error(await r.text());
-            return r.json();
-          })
-          .then(() => {
-            this.saveMsg = 'Saved.';
-          })
-          .catch(() => { this.saveMsg = 'Save failed.'; })
-          .finally(() => { this.saving = false; });
-        },
-
-        // Helpers
-        onlyTime(ts) {
-          if (!ts) return null;
-          // Accepts "YYYY-MM-DD HH:mm:ss" or "HH:mm:ss"
-          const s = ts.replace('T',' ');
-          if (s.includes(' ')) return s.split(' ')[1];
-          // If just HH:mm or HH:mm:ss, return as-is (ensure seconds)
-          if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) {
-            return s.length === 5 ? s + ':00' : s;
-          }
-          return null;
-        },
-
-        formatTime12(ts) {
-          // For raw logs display in 12-hour
+        formatTime(ts) {
           if (!ts) return '';
-          const s = ts.replace('T',' ');
-          const time = (s.includes(' ') ? s.split(' ')[1] : s);
-          // time "HH:mm:ss"
-          const [H,M,S='00'] = time.split(':');
-          let h = parseInt(H,10);
-          const ampm = h >= 12 ? 'PM' : 'AM';
-          h = h % 12; if (h === 0) h = 12;
-          return `${h}:${M}:${S} ${ampm}`;
+          const parts = ts.replace('T',' ').split(' ');
+          const t = (parts[1] || ts);
+          const [h,m,s] = t.split(':').map(n => parseInt(n, 10));
+          const d = new Date(2000,0,1,h,m,s||0);
+          return d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit', second:'2-digit' });
         }
       }
     }
