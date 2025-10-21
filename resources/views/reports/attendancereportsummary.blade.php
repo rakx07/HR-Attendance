@@ -1,4 +1,3 @@
-{{-- resources/views/reports/attendancereportsummary.blade.php --}}
 <x-app-layout>
   <x-slot name="header">
     <h2 class="font-semibold text-xl">Attendance Report Summary</h2>
@@ -83,52 +82,72 @@
           }
       }
 
-      // ===== Helpers (hours = overlap with duty windows, never negative) =====
-      $overlapMinutes = function (? \Carbon\Carbon $a1, ? \Carbon\Carbon $a2, ? \Carbon\Carbon $b1, ? \Carbon\Carbon $b2): int {
+      // ===== UPDATED HELPERS (seconds precision + grace snapping) =====
+      $overlapSeconds = function (? \Carbon\Carbon $a1, ? \Carbon\Carbon $a2, ? \Carbon\Carbon $b1, ? \Carbon\Carbon $b2): int {
           if (!$a1 || !$a2 || !$b1 || !$b2) return 0;
           if ($a2->lte($a1) || $b2->lte($b1)) return 0;
           $s = max($a1->timestamp, $b1->timestamp);
           $e = min($a2->timestamp, $b2->timestamp);
-          return $e > $s ? (int) floor(($e - $s)/60) : 0;
+          return $e > $s ? ($e - $s) : 0;
       };
 
-      $computeHours = function($rec, $daySched) use ($overlapMinutes) {
+      $computeHours = function($rec, $daySched, int $graceMin = 0) use ($overlapSeconds) {
           if (!$rec) return 0.00;
           $date = \Carbon\Carbon::parse($rec->work_date)->toDateString();
 
-          $mins = 0;
+          $secs = 0;
           $hasAM = !empty($daySched['am_in']) && !empty($daySched['am_out']);
           $hasPM = !empty($daySched['pm_in']) && !empty($daySched['pm_out']);
 
-          if ($hasAM || $hasPM) {
-              if (!empty($rec->am_in) && !empty($rec->am_out) && $hasAM) {
-                  $amIn  = \Carbon\Carbon::parse($rec->am_in);
-                  $amOut = \Carbon\Carbon::parse($rec->am_out);
-                  $wIn   = \Carbon\Carbon::parse("$date {$daySched['am_in']}");
-                  $wOut  = \Carbon\Carbon::parse("$date {$daySched['am_out']}");
-                  $mins += $overlapMinutes($amIn, $amOut, $wIn, $wOut);
-              }
-              if (!empty($rec->pm_in) && !empty($rec->pm_out) && $hasPM) {
-                  $pmIn  = \Carbon\Carbon::parse($rec->pm_in);
-                  $pmOut = \Carbon\Carbon::parse($rec->pm_out);
-                  $wIn   = \Carbon\Carbon::parse("$date {$daySched['pm_in']}");
-                  $wOut  = \Carbon\Carbon::parse("$date {$daySched['pm_out']}");
-                  $mins += $overlapMinutes($pmIn, $pmOut, $wIn, $wOut);
-              }
-          } else {
+          if ($hasAM && $rec->am_in && $rec->am_out) {
+              $amIn   = \Carbon\Carbon::parse($rec->am_in);
+              $amOut  = \Carbon\Carbon::parse($rec->am_out);
+              $wInAM  = \Carbon\Carbon::parse("$date {$daySched['am_in']}");
+              $wOutAM = \Carbon\Carbon::parse("$date {$daySched['am_out']}");
+
+              // Snap AM In to scheduled if within grace minutes late
+              $snapCut = $wInAM->copy()->addMinutes($graceMin);
+              if ($amIn->betweenIncluded($wInAM, $snapCut)) $amIn = $wInAM->copy();
+
+              // Clamp to window
+              if ($amIn->lt($wInAM))  $amIn  = $wInAM->copy();
+              if ($amOut->gt($wOutAM)) $amOut = $wOutAM->copy();
+
+              $secs += $overlapSeconds($amIn, $amOut, $wInAM, $wOutAM);
+          }
+
+          if ($hasPM && $rec->pm_in && $rec->pm_out) {
+              $pmIn   = \Carbon\Carbon::parse($rec->pm_in);
+              $pmOut  = \Carbon\Carbon::parse($rec->pm_out);
+              $wInPM  = \Carbon\Carbon::parse("$date {$daySched['pm_in']}");
+              $wOutPM = \Carbon\Carbon::parse("$date {$daySched['pm_out']}");
+
+              // Snap PM In to scheduled if within grace minutes late
+              $snapCut = $wInPM->copy()->addMinutes($graceMin);
+              if ($pmIn->betweenIncluded($wInPM, $snapCut)) $pmIn = $wInPM->copy();
+
+              // Clamp to window
+              if ($pmIn->lt($wInPM))  $pmIn  = $wInPM->copy();
+              if ($pmOut->gt($wOutPM)) $pmOut = $wOutPM->copy();
+
+              $secs += $overlapSeconds($pmIn, $pmOut, $wInPM, $wOutPM);
+          }
+
+          // Fallback when no configured windows
+          if (!$hasAM && !$hasPM) {
               if (!empty($rec->am_in) && !empty($rec->am_out)) {
                   $a = \Carbon\Carbon::parse($rec->am_in);
                   $b = \Carbon\Carbon::parse($rec->am_out);
-                  if ($b->gt($a)) $mins += $b->diffInMinutes($a);
+                  if ($b->gt($a)) $secs += $b->diffInSeconds($a);
               }
               if (!empty($rec->pm_in) && !empty($rec->pm_out)) {
                   $a = \Carbon\Carbon::parse($rec->pm_in);
                   $b = \Carbon\Carbon::parse($rec->pm_out);
-                  if ($b->gt($a)) $mins += $b->diffInMinutes($a);
+                  if ($b->gt($a)) $secs += $b->diffInSeconds($a);
               }
           }
 
-          return round(max(0, $mins)/60, 2);
+          return round(max(0, $secs)/3600, 2);
       };
 
       $calcLate = function($rec,$daySched,$graceMin){
@@ -214,7 +233,7 @@
 
             $late  = $calcLate($r,$dSched,$grace);
             $under = $calcUnder($r,$dSched);
-            $hours = $computeHours($r,$dSched);
+            $hours = $computeHours($r,$dSched,$grace);
 
             // PM-In duplication guard
             $pmInShow = $r->pm_in;
@@ -351,7 +370,6 @@
 
         fetchRaw() {
           this.modalLoading = true;
-          // ✅ FIX: call the summary raw endpoint so rows are scoped to the selected employee
           fetch(`{{ route('reports.attendance.summary.raw') }}?user_id=${this.modalUser}&date=${this.modalDate}`, {
             headers: { 'Accept': 'application/json' }
           })

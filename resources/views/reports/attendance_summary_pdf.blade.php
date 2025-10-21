@@ -1,4 +1,3 @@
-{{-- resources/views/reports/attendance_summary_pdf.blade.php --}}
 <!DOCTYPE html>
 <html>
 <head>
@@ -101,46 +100,63 @@
     }
   }
 
-  // ==== Helpers (no "use" statements) ====
+  // ==== Helpers ====
   $timeCell = function (?string $ts) { if (!$ts) return '—'; try { return \Carbon\Carbon::parse($ts)->format('g:i:s A'); } catch (\Throwable $e) { return '—'; } };
   $fmt2 = fn($n) => number_format((float)$n, 2, '.', '');
 
-  $overlapMinutes = function (? \Carbon\Carbon $a1, ? \Carbon\Carbon $a2, ? \Carbon\Carbon $b1, ? \Carbon\Carbon $b2): int {
+  // UPDATED: seconds precision + grace snapping
+  $overlapSeconds = function (? \Carbon\Carbon $a1, ? \Carbon\Carbon $a2, ? \Carbon\Carbon $b1, ? \Carbon\Carbon $b2): int {
       if (!$a1 || !$a2 || !$b1 || !$b2) return 0;
       if ($a2->lte($a1) || $b2->lte($b1)) return 0;
       $s = max($a1->timestamp, $b1->timestamp);
       $e = min($a2->timestamp, $b2->timestamp);
-      return $e > $s ? (int) floor(($e - $s)/60) : 0;
+      return $e > $s ? ($e - $s) : 0;
   };
 
-  $computeHours = function($rec, $daySched) use ($overlapMinutes) {
+  $computeHours = function($rec, $daySched, int $graceMin = 0) use ($overlapSeconds) {
       if (!$rec) return 0.00;
       $date = \Carbon\Carbon::parse($rec->work_date)->toDateString();
-      $mins = 0;
+      $secs = 0;
+
       $hasAM = !empty($daySched['am_in']) && !empty($daySched['am_out']);
       $hasPM = !empty($daySched['pm_in']) && !empty($daySched['pm_out']);
-      if ($hasAM || $hasPM) {
-          if (!empty($rec->am_in) && !empty($rec->am_out) && $hasAM) {
-              $amIn=\Carbon\Carbon::parse($rec->am_in); $amOut=\Carbon\Carbon::parse($rec->am_out);
-              $wIn=\Carbon\Carbon::parse("$date {$daySched['am_in']}"); $wOut=\Carbon\Carbon::parse("$date {$daySched['am_out']}");
-              $mins += $overlapMinutes($amIn,$amOut,$wIn,$wOut);
-          }
-          if (!empty($rec->pm_in) && !empty($rec->pm_out) && $hasPM) {
-              $pmIn=\Carbon\Carbon::parse($rec->pm_in); $pmOut=\Carbon\Carbon::parse($rec->pm_out);
-              $wIn=\Carbon\Carbon::parse("$date {$daySched['pm_in']}"); $wOut=\Carbon\Carbon::parse("$date {$daySched['pm_out']}");
-              $mins += $overlapMinutes($pmIn,$pmOut,$wIn,$wOut);
-          }
-      } else {
-          if (!empty($rec->am_in) && !empty($rec->am_out)) {
+
+      if ($hasAM && $rec->am_in && $rec->am_out) {
+          $amIn=\Carbon\Carbon::parse($rec->am_in);
+          $amOut=\Carbon\Carbon::parse($rec->am_out);
+          $wIn=\Carbon\Carbon::parse("$date {$daySched['am_in']}");
+          $wOut=\Carbon\Carbon::parse("$date {$daySched['am_out']}");
+          $snap=$wIn->copy()->addMinutes($graceMin);
+          if ($amIn->betweenIncluded($wIn,$snap)) $amIn=$wIn->copy();
+          if ($amIn->lt($wIn))  $amIn=$wIn->copy();
+          if ($amOut->gt($wOut))$amOut=$wOut->copy();
+          $secs += $overlapSeconds($amIn,$amOut,$wIn,$wOut);
+      }
+
+      if ($hasPM && $rec->pm_in && $rec->pm_out) {
+          $pmIn=\Carbon\Carbon::parse($rec->pm_in);
+          $pmOut=\Carbon\Carbon::parse($rec->pm_out);
+          $wIn=\Carbon\Carbon::parse("$date {$daySched['pm_in']}");
+          $wOut=\Carbon\Carbon::parse("$date {$daySched['pm_out']}");
+          $snap=$wIn->copy()->addMinutes($graceMin);
+          if ($pmIn->betweenIncluded($wIn,$snap)) $pmIn=$wIn->copy();
+          if ($pmIn->lt($wIn))  $pmIn=$wIn->copy();
+          if ($pmOut->gt($wOut))$pmOut=$wOut->copy();
+          $secs += $overlapSeconds($pmIn,$pmOut,$wIn,$wOut);
+      }
+
+      if (!$hasAM && !$hasPM) {
+          if ($rec->am_in && $rec->am_out) {
               $a=\Carbon\Carbon::parse($rec->am_in); $b=\Carbon\Carbon::parse($rec->am_out);
-              if ($b->gt($a)) $mins += $b->diffInMinutes($a);
+              if ($b->gt($a)) $secs += $b->diffInSeconds($a);
           }
-          if (!empty($rec->pm_in) && !empty($rec->pm_out)) {
+          if ($rec->pm_in && $rec->pm_out) {
               $a=\Carbon\Carbon::parse($rec->pm_in); $b=\Carbon\Carbon::parse($rec->pm_out);
-              if ($b->gt($a)) $mins += $b->diffInMinutes($a);
+              if ($b->gt($a)) $secs += $b->diffInSeconds($a);
           }
       }
-      return round(max(0,$mins)/60, 2);
+
+      return round(max(0,$secs)/3600, 2);
   };
 
   $calcLate = function($rec,$daySched,$graceMin){
@@ -226,13 +242,10 @@
             $sid  = (int)($emp->shift_window_id ?? $rec->shift_window_id ?? 0);
             $dow0 = $day->dayOfWeek; // 0..6
 
-            $dSched = $sched[$sid][$dow0] ?? null;
-            if ($dSched === null) {
-              $dSched = [
-                'work'  => ($dow0 === \Carbon\Carbon::SUNDAY) ? 0 : 1,
-                'am_in' => null, 'am_out' => null, 'pm_in' => null, 'pm_out' => null,
-              ];
-            }
+            $dSched = $sched[$sid][$dow0] ?? [
+              'work'  => ($dow0 === \Carbon\Carbon::SUNDAY) ? 0 : 1,
+              'am_in' => null, 'am_out' => null, 'pm_in' => null, 'pm_out' => null,
+            ];
             $graceMin = $graceByShift[$sid] ?? 0;
 
             $hol   = $holidays->get($dkey);
@@ -261,7 +274,7 @@
             $hours = 0.00;
             if ($rec) {
               $hours = (float)($rec->total_hours ?? 0);
-              if ($hours <= 0) $hours = $computeHours($rec, $dSched);
+              if ($hours <= 0) $hours = $computeHours($rec, $dSched, $graceMin);
               $hours = round($hours, 2);
             }
 
