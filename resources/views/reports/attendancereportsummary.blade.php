@@ -351,7 +351,10 @@
 
         fetchRaw() {
           this.modalLoading = true;
-          fetch(`{{ route('reports.attendance.raw') }}?user_id=${this.modalUser}&date=${this.modalDate}`, { headers: { 'Accept': 'application/json' } })
+          // ✅ FIX: call the summary raw endpoint so rows are scoped to the selected employee
+          fetch(`{{ route('reports.attendance.summary.raw') }}?user_id=${this.modalUser}&date=${this.modalDate}`, {
+            headers: { 'Accept': 'application/json' }
+          })
             .then(r => r.json())
             .then(d => { this.modalRows = d.rows || []; })
             .catch(() => { this.modalRows = []; })

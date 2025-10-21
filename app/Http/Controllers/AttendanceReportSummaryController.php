@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Carbon\Carbon;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Schema;
 
 class AttendanceReportSummaryController extends Controller
 {
@@ -61,20 +62,60 @@ class AttendanceReportSummaryController extends Controller
 
     /** Raw logs for modal */
     public function raw(Request $req)
-    {
-        $userId = (int)$req->query('user_id');
-        $date   = $req->query('date');
+{
+    $userId = (int) $req->query('user_id');
+    $date   = $req->query('date');
 
-        $rows = DB::table('attendance_raw')
-            ->select('id','punched_at','punch_type','source','device_sn')
-            ->where('user_id', $userId)
-            ->whereDate('punched_at', $date)
-            ->orderBy('punched_at')
-            ->limit(200)
-            ->get();
+    // 1) Get this employee’s mappings that exist in *your* schema
+    $u = DB::table('users')
+        ->select('id', 'zkteco_user_id', 'school_id')   // <- you have these columns
+        ->where('id', $userId)
+        ->first();
 
-        return response()->json(['rows'=>$rows]);
+    if (!$u) {
+        return response()->json(['rows' => []]);
     }
+
+    // 2) Build a precise filter for this user only
+    //    - Biotime: your import stores Biotime’s "person code" in attendance_raw.device_user_id,
+    //               and you store your person code in users.school_id.
+    //    - ZKTeco (if ever present): many installs write the device id into attendance_raw.user_id;
+    //               fall back to that when source != 'biotime'.
+    $q = DB::table('attendance_raw')
+        ->select('id','punched_at','punch_type','source','device_sn','device_user_id','user_id')
+        ->whereDate('punched_at', $date)
+        ->where(function ($qq) use ($u) {
+            // BIOTIME rows that belong to this user (device_user_id == school_id)
+            if (!empty($u->school_id)) {
+                $qq->orWhere(function ($q2) use ($u) {
+                    $q2->where('source', 'biotime')
+                       ->where('device_user_id', (string) $u->school_id);
+                });
+            }
+
+            // NON-BIOTIME rows (e.g., zkteco) that belong to this user
+            if (!empty($u->zkteco_user_id)) {
+                $qq->orWhere(function ($q2) use ($u) {
+                    $q2->where('source', '!=', 'biotime')
+                       ->where('user_id', (int) $u->zkteco_user_id);
+                });
+            }
+
+            // If your import already saved Laravel users.id into attendance_raw.user_id,
+            // this keeps them too (harmless no-op otherwise).
+            $qq->orWhere('user_id', (int) $u->id);
+        });
+
+    // Optional: keep only attendance punches if you store other events
+    if (Schema::hasColumn('attendance_raw', 'punch_type')) {
+        $q->where('punch_type', 15);
+    }
+
+    $rows = $q->orderBy('punched_at')->limit(1000)->get();
+
+    return response()->json(['rows' => $rows]);
+}
+
 
     /** Save/Upsert a correction into attendance_corrections (audit trail) */
     public function save(Request $req)
