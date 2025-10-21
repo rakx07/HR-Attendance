@@ -35,12 +35,12 @@ class AttendanceReportSummaryController extends Controller
             ->orderBy('name')
             ->get();
 
-        // Main list (NOTE: we intentionally DO NOT select d.total_hours; we recompute in Blade)
+        // Main list (web table) — paginate is OK for web
         $rows = DB::table('attendance_days as d')
             ->join('users as u','u.id','=','d.user_id')
             ->select([
                 'd.user_id','d.work_date','d.am_in','d.am_out','d.pm_in','d.pm_out',
-                'd.late_minutes','d.undertime_minutes','d.status', // kept for reference; not used for totals
+                'd.late_minutes','d.undertime_minutes','d.status',
                 'u.shift_window_id',
                 DB::raw("TRIM(CONCAT(u.last_name, ', ', u.first_name, ' ', COALESCE(u.middle_name, ''))) AS name"),
                 'u.department',
@@ -119,11 +119,10 @@ class AttendanceReportSummaryController extends Controller
             ]));
         }
 
-        // recomputation of totals stays in your existing endpoints / nightly jobs
         return response()->json(['ok'=>true]);
     }
 
-    /** PDF export (we still avoid using DB total_hours; the Blade recomputes) */
+    /** PDF export — FIXED: same data as web, ordered by user_id, work_date; no pagination */
     public function pdf(Request $r)
     {
         @ini_set('max_execution_time', '0');
@@ -131,8 +130,8 @@ class AttendanceReportSummaryController extends Controller
         if (function_exists('set_time_limit')) @set_time_limit(0);
         DB::connection()->disableQueryLog();
 
-        $from  = $r->input('from');
-        $to    = $r->input('to');
+        $from  = $r->input('from') ?: Carbon::now()->startOfMonth()->toDateString();
+        $to    = $r->input('to')   ?: Carbon::now()->endOfMonth()->toDateString();
         $empId = $r->input('employee_id');
         $dept  = $r->input('dept');
 
@@ -143,8 +142,11 @@ class AttendanceReportSummaryController extends Controller
             ->when($empId, fn($qq)=>$qq->where('d.user_id',$empId))
             ->when($dept,  fn($qq)=>$qq->where('u.department','like',"%{$dept}%"));
 
+        // Count BEFORE any ordering/limits
         $totalRows = (clone $q)->count('d.user_id');
-        $maxRows   = (int)($r->input('max_rows') ?: 1500);
+
+        // If you truly need a cap, keep it generous. Otherwise you can remove it.
+        $maxRows   = (int)($r->input('max_rows') ?: 50000);
         $truncated = $totalRows > $maxRows;
 
         $rows = (clone $q)
@@ -155,10 +157,10 @@ class AttendanceReportSummaryController extends Controller
                 DB::raw("TRIM(CONCAT(u.last_name, ', ', u.first_name, ' ', COALESCE(u.middle_name, ''))) AS name"),
                 'u.department',
             ])
-            ->orderBy('d.work_date','desc')
-            ->orderBy('u.last_name','asc')
-            ->orderBy('u.first_name','asc')
-            ->limit($maxRows)
+            // IMPORTANT: employee-first, date ASC so Blade grouping works
+            ->orderBy('d.user_id')
+            ->orderBy('d.work_date')
+            ->when($truncated, fn($qq)=>$qq->limit($maxRows))
             ->get();
 
         if ($r->boolean('debug')) {
