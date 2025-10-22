@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <title>Attendance Report Summary</title>
   <style>
-    /* Page + typography tuned to fit 1 month per employee on a single page */
+    /* Fit 1 employee-month on one page (letter portrait) */
     @page { size: letter portrait; margin: 10mm 8mm; }
     body { font-family: DejaVu Sans, sans-serif; color:#111; font-size:8.3px; line-height:1.12; }
 
-    .employee { page-break-inside: avoid; }     /* keep whole block on one page */
+    .employee { page-break-inside: avoid; }
     .employee + .employee { page-break-before: always; }
 
     .header { text-align:center; margin-bottom:2px; }
@@ -20,35 +20,37 @@
     .meta-table td { padding:0; vertical-align:top; }
 
     table { width:100%; border-collapse:collapse; table-layout:fixed; }
-    th, td { border:0.5pt solid #444; padding:1px 2px; }   /* compact padding */
+    th, td { border:0.5pt solid #444; padding:1px 2px; }
     th { font-weight:700; text-align:center; font-size:8.1px; }
     td { vertical-align:top; font-size:8.1px; }
 
     thead { display: table-header-group; }
     tr { page-break-inside: avoid; }
 
-    /* Column widths balanced to fit everything */
+    /* Column widths */
     .w-date { width:12%; }
-    .w-time { width:11%; }   /* 4 × 11 = 44% */
-    .w-min  { width:8%;  }   /* 2 × 8  = 16% */
+    .w-time { width:11%; }  /* AM In / AM Out / PM In / PM Out (x4 = 44%) */
+    .w-min  { width:8%;  }  /* Late / Undertime (x2 = 16%) */
     .w-hrs  { width:7%;  }
     .w-stat { width:7%;  }
-    .w-remarks { width:8%; } /* a bit smaller so times stay readable */
+    .w-remarks { width:8%; }
 
-    /* Safer multi-line headers (prevents overlap) */
-    th .th-wrap {
-      display:block;
-      white-space:normal;
-      word-break:break-word;
-      line-height:1.05;
-      overflow:hidden;
-      font-size:8.0px;
-    }
+    /* Multiline headers that don’t overlap */
+    th .th-wrap { display:block; white-space:normal; word-break:break-word; line-height:1.05; overflow:hidden; font-size:8.0px; }
 
     .time   { white-space:nowrap; font-size:8.1px; }
     .totals { margin-top:3px; font-weight:700; font-size:8.2px; }
 
-    .holiday-merge { background:#eef6ff; font-weight:700; text-align:center; white-space:nowrap; }
+    /* Holiday merged cell spans all non-date columns (9 cols) */
+    .holiday-merge {
+      background:#eef6ff;
+      font-weight:700;
+      text-align:center;
+      white-space:nowrap;
+    }
+
+    /* Remarks cell height for handwriting */
+    td.remarks-cell { height:13px; }
 
     .sig-table { width:100%; border-collapse:collapse; margin-top:6px; }
     .sig-table td { border:0; vertical-align:bottom; }
@@ -58,9 +60,6 @@
     .sig-label { font-size:8px; text-align:center; margin-top:2px; }
 
     .truncate-note { margin-top:4px; font-size:7.8px; color:#666; }
-
-    /* Remarks cell: single line but enough height to write by hand */
-    td.remarks-cell { height:13px; }
   </style>
 </head>
 <body>
@@ -69,7 +68,7 @@
   use Carbon\CarbonPeriod;
   use Illuminate\Support\Facades\DB;
 
-  // ==== Inputs / range (safe defaults) ====
+  // ==== Inputs / range ====
   $fromStr = $from ?? ($filters['from'] ?? null);
   $toStr   = $to   ?? ($filters['to']   ?? null);
 
@@ -80,8 +79,6 @@
 
   $fromC = Carbon::parse($fromStr)->startOfDay();
   $toC   = Carbon::parse($toStr)->startOfDay();
-
-  // Ensure the PDF shows day-by-day rows from start..end
   $period = new CarbonPeriod($fromC, $toC);
 
   // ==== Holidays (active calendars only) ====
@@ -92,16 +89,16 @@
       ->get(['hd.date','hd.name','hd.is_non_working'])
       ->keyBy(fn($h) => Carbon::parse($h->date)->toDateString());
 
-  // ==== Group rows by employee ====
+  // ==== Group by employee ====
   $collection = is_array($rows) ? collect($rows) : $rows;
   $grouped = $collection->groupBy('user_id');
 
-  // ==== Load grace + daily schedules only for the shifts present ====
+  // ==== Load shift grace + daily schedules ====
   $shiftIds = $collection->pluck('shift_window_id')->filter()->unique()->values();
 
   $graceByShift = [];
   if ($shiftIds->isNotEmpty()) {
-    $graces = DB::table('shift_windows')->whereIn('id', $shiftIds)->pluck('grace_minutes', 'id');
+    $graces = DB::table('shift_windows')->whereIn('id', $shiftIds)->pluck('grace_minutes','id');
     foreach ($graces as $sid => $gm) $graceByShift[(int)$sid] = (int)$gm;
   }
 
@@ -111,23 +108,15 @@
         ->whereIn('shift_window_id', $shiftIds)
         ->get(['shift_window_id','dow','is_working','am_in','am_out','pm_in','pm_out']);
     foreach ($rowsDays as $d) {
-      $sid  = (int)$d->shift_window_id;
-      $dow0 = ((int)$d->dow) % 7; // 0..6
+      $sid=(int)$d->shift_window_id; $dow0=((int)$d->dow)%7;
       $isWork = isset($d->is_working) ? (int)$d->is_working
               : ((is_null($d->am_in) && is_null($d->pm_in)) ? 0 : 1);
-      $sched[$sid][$dow0] = [
-        'work'  => $isWork,
-        'am_in' => $d->am_in, 'am_out' => $d->am_out,
-        'pm_in' => $d->pm_in, 'pm_out' => $d->pm_out,
-      ];
+      $sched[$sid][$dow0]=['work'=>$isWork,'am_in'=>$d->am_in,'am_out'=>$d->am_out,'pm_in'=>$d->pm_in,'pm_out'=>$d->pm_out];
     }
   }
 
   // ==== Helpers ====
-  $timeCell = function (?string $ts) {
-    if (!$ts) return '—';
-    try { return Carbon::parse($ts)->format('g:i:s A'); } catch (\Throwable $e) { return '—'; }
-  };
+  $timeCell = function (?string $ts) { if (!$ts) return '—'; try { return Carbon::parse($ts)->format('g:i:s A'); } catch (\Throwable $e) { return '—'; } };
   $fmt2 = fn($n) => number_format((float)$n, 2, '.', '');
 
   $overlapSeconds = function (?Carbon $a1, ?Carbon $a2, ?Carbon $b1, ?Carbon $b2): int {
@@ -147,70 +136,66 @@
       $hasPM = !empty($daySched['pm_in']) && !empty($daySched['pm_out']);
 
       if ($hasAM && $rec->am_in && $rec->am_out) {
-          $amIn = Carbon::parse($rec->am_in);
-          $amOut= Carbon::parse($rec->am_out);
-          $wIn  = Carbon::parse("$date {$daySched['am_in']}");
-          $wOut = Carbon::parse("$date {$daySched['am_out']}");
-          $snap = $wIn->copy()->addMinutes($graceMin);
-          if ($amIn->betweenIncluded($wIn, $snap)) $amIn = $wIn->copy();
-          if ($amIn->lt($wIn))  $amIn  = $wIn->copy();
-          if ($amOut->gt($wOut)) $amOut = $wOut->copy();
-          $secs += $overlapSeconds($amIn, $amOut, $wIn, $wOut);
+          $amIn=Carbon::parse($rec->am_in); $amOut=Carbon::parse($rec->am_out);
+          $wIn=Carbon::parse("$date {$daySched['am_in']}"); $wOut=Carbon::parse("$date {$daySched['am_out']}");
+          $snap=$wIn->copy()->addMinutes($graceMin);
+          if ($amIn->betweenIncluded($wIn,$snap)) $amIn=$wIn->copy();
+          if ($amIn->lt($wIn))  $amIn=$wIn->copy();
+          if ($amOut->gt($wOut))$amOut=$wOut->copy();
+          $secs += $overlapSeconds($amIn,$amOut,$wIn,$wOut);
       }
 
       if ($hasPM && $rec->pm_in && $rec->pm_out) {
-          $pmIn = Carbon::parse($rec->pm_in);
-          $pmOut= Carbon::parse($rec->pm_out);
-          $wIn  = Carbon::parse("$date {$daySched['pm_in']}");
-          $wOut = Carbon::parse("$date {$daySched['pm_out']}");
-          $snap = $wIn->copy()->addMinutes($graceMin);
-          if ($pmIn->betweenIncluded($wIn, $snap)) $pmIn = $wIn->copy();
-          if ($pmIn->lt($wIn))  $pmIn  = $wIn->copy();
-          if ($pmOut->gt($wOut)) $pmOut = $wOut->copy();
-          $secs += $overlapSeconds($pmIn, $pmOut, $wIn, $wOut);
+          $pmIn=Carbon::parse($rec->pm_in); $pmOut=Carbon::parse($rec->pm_out);
+          $wIn=Carbon::parse("$date {$daySched['pm_in']}"); $wOut=Carbon::parse("$date {$daySched['pm_out']}");
+          $snap=$wIn->copy()->addMinutes($graceMin);
+          if ($pmIn->betweenIncluded($wIn,$snap)) $pmIn=$wIn->copy();
+          if ($pmIn->lt($wIn))  $pmIn=$wIn->copy();
+          if ($pmOut->gt($wOut))$pmOut=$wOut->copy();
+          $secs += $overlapSeconds($pmIn,$pmOut,$wIn,$wOut);
       }
 
       if (!$hasAM && !$hasPM) {
           if ($rec->am_in && $rec->am_out) {
-              $a = Carbon::parse($rec->am_in); $b = Carbon::parse($rec->am_out);
+              $a=Carbon::parse($rec->am_in); $b=Carbon::parse($rec->am_out);
               if ($b->gt($a)) $secs += $b->diffInSeconds($a);
           }
           if ($rec->pm_in && $rec->pm_out) {
-              $a = Carbon::parse($rec->pm_in); $b = Carbon::parse($rec->pm_out);
+              $a=Carbon::parse($rec->pm_in); $b=Carbon::parse($rec->pm_out);
               if ($b->gt($a)) $secs += $b->diffInSeconds($a);
           }
       }
 
-      return round(max(0, $secs) / 3600, 2);
+      return round(max(0,$secs)/3600, 2);
   };
 
-  $calcLate = function($rec, $daySched, $graceMin){
+  $calcLate = function($rec,$daySched,$graceMin){
       if (!$rec || !$daySched || (int)($daySched['work']??1)===0) return 0;
       $date = Carbon::parse($rec->work_date)->toDateString();
       $late = 0;
       if (!empty($rec->am_in) && !empty($daySched['am_in'])) {
-          $sched = Carbon::parse("$date {$daySched['am_in']}")->addMinutes($graceMin);
-          $act   = Carbon::parse($rec->am_in);
+          $sched=Carbon::parse("$date {$daySched['am_in']}")->addMinutes($graceMin);
+          $act=Carbon::parse($rec->am_in);
           if ($act->gt($sched)) $late += $sched->diffInMinutes($act);
       }
       if (!empty($rec->pm_in) && !empty($daySched['pm_in'])) {
-          $sched = Carbon::parse("$date {$daySched['pm_in']}")->addMinutes($graceMin);
-          $act   = Carbon::parse($rec->pm_in);
+          $sched=Carbon::parse("$date {$daySched['pm_in']}")->addMinutes($graceMin);
+          $act=Carbon::parse($rec->pm_in);
           if ($act->gt($sched)) $late += $sched->diffInMinutes($act);
       }
       return (int)$late;
   };
 
-  $calcUnder = function($rec, $daySched){
+  $calcUnder = function($rec,$daySched){
       if (!$rec || !$daySched || (int)($daySched['work']??1)===0) return 0;
       $date = Carbon::parse($rec->work_date)->toDateString();
       $ut = 0;
       if (!empty($rec->am_out) && !empty($daySched['am_out'])) {
-          $sched = Carbon::parse("$date {$daySched['am_out']}"); $act = Carbon::parse($rec->am_out);
+          $sched=Carbon::parse("$date {$daySched['am_out']}"); $act=Carbon::parse($rec->am_out);
           if ($act->lt($sched)) $ut += $act->diffInMinutes($sched);
       }
       if (!empty($rec->pm_out) && !empty($daySched['pm_out'])) {
-          $sched = Carbon::parse("$date {$daySched['pm_out']}"); $act = Carbon::parse($rec->pm_out);
+          $sched=Carbon::parse("$date {$daySched['pm_out']}"); $act=Carbon::parse($rec->pm_out);
           if ($act->lt($sched)) $ut += $act->diffInMinutes($sched);
       }
       return (int)$ut;
@@ -220,7 +205,7 @@
 @foreach($grouped as $userId => $empRows)
   @php
     $emp       = $empRows->first();
-    $byDate    = $empRows->keyBy(fn($r) => Carbon::parse($r->work_date)->toDateString());
+    $byDate    = $empRows->keyBy(fn($r)=>Carbon::parse($r->work_date)->toDateString());
     $rangeText = $fromC->toDateString().' to '.$toC->toDateString();
     $sumLate = 0.0; $sumUnder = 0.0; $sumHours = 0.0;
   @endphp
@@ -279,6 +264,7 @@
             $hasScan = $rec && ($rec->am_in || $rec->am_out || $rec->pm_in || $rec->pm_out);
             $isWorkingDay = (int)($dSched['work'] ?? 1) === 1;
 
+            // Determine status text for non-holiday rows
             if ($rec && !empty($rec->status)) {
               $status = $rec->status;
             } elseif ($isHolidayNonWorking && !$hasScan) {
@@ -291,29 +277,42 @@
 
             $dispLate  = $rec ? $calcLate($rec,  $dSched, $graceMin) : 0;
             $dispUnder = $rec ? $calcUnder($rec, $dSched)           : 0;
+
             $hours = 0.00;
             if ($rec) {
               $hours = (float)($rec->total_hours ?? 0);
               if ($hours <= 0) $hours = $computeHours($rec, $dSched, $graceMin);
               $hours = round($hours, 2);
             }
+
             $sumLate  += $dispLate;
             $sumUnder += $dispUnder;
             $sumHours += $hours;
+
+            $showMergedHoliday = !$hasScan && $isHolidayNonWorking;
           @endphp
 
-          <tr>
-            <td style="text-align:center">{{ $dkey }}</td>
-            <td class="time" style="text-align:center">{{ $timeCell($rec->am_in ?? null) }}</td>
-            <td class="time" style="text-align:center">{{ $timeCell($rec->am_out ?? null) }}</td>
-            <td class="time" style="text-align:center">{{ $timeCell($rec->pm_in ?? null) }}</td>
-            <td class="time" style="text-align:center">{{ $timeCell($rec->pm_out ?? null) }}</td>
-            <td style="text-align:right">{{ $fmt2($dispLate) }}</td>
-            <td style="text-align:right">{{ $fmt2($dispUnder) }}</td>
-            <td style="text-align:right">{{ $fmt2($hours) }}</td>
-            <td style="text-align:center">{{ $status }}</td>
-            <td class="remarks-cell">&nbsp;</td>
-          </tr>
+          @if($showMergedHoliday)
+            <tr>
+              <!-- Date stays in first column -->
+              <td style="text-align:center">{{ $dkey }}</td>
+              <!-- Merge the rest 9 columns -->
+              <td class="holiday-merge" colspan="9">Holiday: {{ $hol->name ?? '—' }}</td>
+            </tr>
+          @else
+            <tr>
+              <td style="text-align:center">{{ $dkey }}</td>
+              <td class="time" style="text-align:center">{{ $timeCell($rec->am_in ?? null) }}</td>
+              <td class="time" style="text-align:center">{{ $timeCell($rec->am_out ?? null) }}</td>
+              <td class="time" style="text-align:center">{{ $timeCell($rec->pm_in ?? null) }}</td>
+              <td class="time" style="text-align:center">{{ $timeCell($rec->pm_out ?? null) }}</td>
+              <td style="text-align:right">{{ $fmt2($dispLate) }}</td>
+              <td style="text-align:right">{{ $fmt2($dispUnder) }}</td>
+              <td style="text-align:right">{{ $fmt2($hours) }}</td>
+              <td style="text-align:center">{{ $status }}</td>
+              <td class="remarks-cell">&nbsp;</td>
+            </tr>
+          @endif
         @endforeach
       </tbody>
     </table>
