@@ -33,12 +33,12 @@
       Attendance Report Summary
     </a>
 
-    @can('reports.export')
+    <!-- @can('reports.export')
       <a href="{{ route('reports.attendance', request()->query()) }}"
          class="block px-3 py-2 rounded hover:bg-gray-50">
         Download (Excel)
       </a>
-    @endcan
+    @endcan -->
   </div>
 @endcan
 

@@ -38,6 +38,11 @@
       <a class="px-4 py-2 bg-gray-800 text-white rounded"
          href="{{ route('reports.attendance.summary.pdf', request()->query()) }}"
          target="_blank">Print PDF</a>
+
+          <a class="px-4 py-2 bg-emerald-600 text-white rounded"
+     href="{{ route('reports.attendance.summary.excel', request()->query()) }}">
+     Download Excel
+  </a>
     </div>
 
     @php

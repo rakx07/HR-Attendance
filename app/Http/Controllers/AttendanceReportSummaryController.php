@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Validator;
 use Carbon\Carbon;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Schema;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Exports\AttendanceSummaryExport; // ⬅ create in step 4
 
 class AttendanceReportSummaryController extends Controller
 {
@@ -223,4 +225,17 @@ class AttendanceReportSummaryController extends Controller
 
         return $pdf->stream('attendance_summary_'.now()->format('Ymd_His').'.pdf');
     }
+    public function excel(Request $r)
+{
+    // performance guards like your PDF
+    @ini_set('max_execution_time', '0');
+    @ini_set('memory_limit', '2048M');
+    if (function_exists('set_time_limit')) @set_time_limit(0);
+    DB::connection()->disableQueryLog();
+
+    $filters = $r->only(['from','to','employee_id','dept']);
+    $filename = 'attendance_summary_' . now()->format('Ymd_His') . '.xlsx';
+
+    return Excel::download(new AttendanceSummaryExport($filters), $filename);
+}
 }

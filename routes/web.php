@@ -125,6 +125,7 @@ Route::middleware(['auth','permission:reports.view.org'])->group(function () {
     Route::get('/reports/attendance/summary',      [AttendanceReportSummaryController::class, 'index'])->name('reports.attendance.summary');
     Route::get('/reports/attendance/summary/raw',  [AttendanceReportSummaryController::class, 'raw'])->name('reports.attendance.summary.raw');
     Route::get('/reports/attendance/summary/pdf',  [AttendanceReportSummaryController::class, 'pdf'])->name('reports.attendance.summary.pdf');
+    Route::get('/reports/attendance/summary/excel', [AttendanceReportSummaryController::class, 'excel'])->name('reports.attendance.summary.excel');
 });
 
 Route::middleware(['auth','permission:attendance.edit'])->post(
