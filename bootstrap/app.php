@@ -3,7 +3,8 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Contracts\Http\Kernel as HttpKernel; // 👈 add this
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Contracts\Console\Kernel as ConsoleKernel; // ← add this use
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -17,11 +18,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions) {
         // keep whatever you already have
     })
-    // 👇 ARRAY, not a closure
     ->withBindings([
         HttpKernel::class => \App\Http\Kernel::class,
-        // You could also add console kernel / exception handler here if needed
-        // \Illuminate\Contracts\Console\Kernel::class => \App\Console\Kernel::class,
+        ConsoleKernel::class => \App\Console\Kernel::class, // ← REQUIRED
         // \Illuminate\Contracts\Debug\ExceptionHandler::class => \App\Exceptions\Handler::class,
     ])
     ->create();
