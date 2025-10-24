@@ -16,29 +16,23 @@ class Kernel extends ConsoleKernel
         $schedule->timezone($tz);
 
         /**
-         * BioTime import — every 10 minutes
-         * Equivalent to:
-         *   php artisan biotime:import --from=YYYY-MM-DD --to=YYYY-MM-DD --summary
-         * Note: --summary is a flag (no value).
+         * BioTime import — every 1 hour
          */
         $schedule->call(function () use ($tz) {
-            $from = Carbon::now($tz)->toDateString(); // today (YYYY-MM-DD)
+            $from = Carbon::now($tz)->toDateString();
             Artisan::call('biotime:import', [
                 '--from'    => $from,
                 '--to'      => $from,
-                '--summary' => true,   // boolean flag (no value)
+                '--summary' => true,
             ]);
         })
-        ->name('biotime-import-today')           // ← REQUIRED when using withoutOverlapping on closures
-        ->everyTenMinutes()
-        ->withoutOverlapping(10)
+        ->name('biotime-import-today')
+        ->hourly() // ← CHANGED HERE
+        ->withoutOverlapping(60)
         ->appendOutputTo(storage_path('logs/schedule_biotime_import.log'));
 
         /**
-         * Attendance consolidate — every 10 minutes
-         * Equivalent to:
-         *   php artisan attendance:consolidate --since="YYYY-MM-DD 00:00:00" --until="YYYY-MM-DD HH:MM:SS" --mode=sequence
-         * Range: start of today → now (recomputed each tick).
+         * Attendance consolidate — every 1 hour
          */
         $schedule->call(function () use ($tz) {
             $now   = Carbon::now($tz);
@@ -51,9 +45,9 @@ class Kernel extends ConsoleKernel
                 '--mode'  => 'sequence',
             ]);
         })
-        ->name('attendance-consolidate-today')   // ← REQUIRED name
-        ->everyTenMinutes()
-        ->withoutOverlapping(20)
+        ->name('attendance-consolidate-today')
+        ->hourly() // ← CHANGED HERE
+        ->withoutOverlapping(60)
         ->appendOutputTo(storage_path('logs/schedule_consolidate.log'));
     }
 
