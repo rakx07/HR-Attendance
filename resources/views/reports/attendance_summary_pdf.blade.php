@@ -208,6 +208,7 @@
     $byDate    = $empRows->keyBy(fn($r)=>Carbon::parse($r->work_date)->toDateString());
     $rangeText = $fromC->toDateString().' to '.$toC->toDateString();
     $sumLate = 0.0; $sumUnder = 0.0; $sumHours = 0.0;
+    $absentCount = 0;
   @endphp
 
   <div class="employee">
@@ -290,6 +291,10 @@
             $sumHours += $hours;
 
             $showMergedHoliday = !$hasScan && $isHolidayNonWorking;
+
+            if (!$showMergedHoliday && $status === 'Absent') {
+              $absentCount++;
+            }
           @endphp
 
           @if($showMergedHoliday)
@@ -318,14 +323,23 @@
     </table>
 
     @php
-      // convert minute totals to hours
-      $sumLateHours  = $sumLate / 60;
-      $sumUnderHours = $sumUnder / 60;
+      // Use rounded totals (integers) and convert to hours + minutes
+      $lateTotalMin   = (int) round($sumLate);
+      $underTotalMin  = (int) round($sumUnder);
+
+      $lateHours      = intdiv($lateTotalMin, 60);
+      $lateMinutes    = $lateTotalMin % 60;
+
+      $underHours     = intdiv($underTotalMin, 60);
+      $underMinutes   = $underTotalMin % 60;
     @endphp
 
     <div class="totals">
-      Late Total: {{ (int) round($sumLate) }} min ({{ $fmt2($sumLateHours) }} hours) &nbsp; | &nbsp;
-      Undertime: {{ (int) round($sumUnder) }} min ({{ $fmt2($sumUnderHours) }} hours)
+      Late Total: {{ $lateTotalMin }} min ({{ $lateHours }} hours {{ $lateMinutes }} minutes)
+      &nbsp; | &nbsp;
+      Undertime: {{ $underTotalMin }} min ({{ $underHours }} hours {{ $underMinutes }} minutes)
+      &nbsp; | &nbsp;
+      Absent: {{ $absentCount }} day{{ $absentCount == 1 ? '' : 's' }}
     </div>
 
     <table class="sig-table">
