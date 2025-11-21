@@ -317,10 +317,15 @@
       </tbody>
     </table>
 
+    @php
+      // convert minute totals to hours
+      $sumLateHours  = $sumLate / 60;
+      $sumUnderHours = $sumUnder / 60;
+    @endphp
+
     <div class="totals">
-      Late Total: {{ $fmt2($sumLate) }} min &nbsp; | &nbsp;
-      Undertime: {{ $fmt2($sumUnder) }} min &nbsp; | &nbsp;
-      Hours: {{ $fmt2($sumHours) }}
+      Late Total: {{ (int) round($sumLate) }} min ({{ $fmt2($sumLateHours) }} hours) &nbsp; | &nbsp;
+      Undertime: {{ (int) round($sumUnder) }} min ({{ $fmt2($sumUnderHours) }} hours)
     </div>
 
     <table class="sig-table">
