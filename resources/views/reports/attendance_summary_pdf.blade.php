@@ -323,21 +323,29 @@
     </table>
 
     @php
-      // Use rounded totals (integers) and convert to hours + minutes
+      // Rounded totals in minutes
       $lateTotalMin   = (int) round($sumLate);
       $underTotalMin  = (int) round($sumUnder);
 
+      // Convert each to hours + minutes
       $lateHours      = intdiv($lateTotalMin, 60);
       $lateMinutes    = $lateTotalMin % 60;
 
       $underHours     = intdiv($underTotalMin, 60);
       $underMinutes   = $underTotalMin % 60;
+
+      // Total late = late + undertime
+      $totalLateMin   = $lateTotalMin + $underTotalMin;
+      $totalLateHours = intdiv($totalLateMin, 60);
+      $totalLateMinutes = $totalLateMin % 60;
     @endphp
 
     <div class="totals">
-      Late Total: {{ $lateTotalMin }} min ({{ $lateHours }} hours {{ $lateMinutes }} minutes)
+      Late: {{ $lateTotalMin }} min ({{ $lateHours }} hour/s {{ $lateMinutes }} minutes)
       &nbsp; | &nbsp;
-      Undertime: {{ $underTotalMin }} min ({{ $underHours }} hours {{ $underMinutes }} minutes)
+      Undertime: {{ $underTotalMin }} min ({{ $underHours }} hour/s {{ $underMinutes }} minutes)
+      &nbsp; | &nbsp;
+      Total late: {{ $totalLateMin }} min ({{ $totalLateHours }} hour/s {{ $totalLateMinutes }} minutes)
       &nbsp; | &nbsp;
       Absent: {{ $absentCount }} day{{ $absentCount == 1 ? '' : 's' }}
     </div>
